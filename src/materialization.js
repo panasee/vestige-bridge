@@ -1,78 +1,149 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { renderShardSnapshot } from './render.js';
-import { groupExportItemsByShard, shardPathForKey, validateExportEnvelope } from './shards.js';
+import {
+  groupItemsByShard,
+  renderShardSnapshot,
+  validateExportEnvelope,
+} from './shards.js';
 
-async function ensureParentDir(filePath) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+function normalizeTmpSuffix(tmpSuffix) {
+  if (typeof tmpSuffix !== 'string' || tmpSuffix.trim().length === 0) {
+    return '.tmp';
+  }
+
+  return tmpSuffix.replace(/[\\/]/gu, '-').trim();
 }
 
-async function atomicWriteFile(filePath, content, tmpSuffix) {
-  const tempPath = `${filePath}${tmpSuffix}`;
-  await ensureParentDir(filePath);
-  await fs.writeFile(tempPath, content, 'utf8');
-  await fs.rename(tempPath, filePath);
-  return { filePath, tempPath };
+async function writeTextFileAtomic(filePath, content, options = {}) {
+  const tmpSuffix = normalizeTmpSuffix(options.tmpSuffix);
+  const directory = path.dirname(filePath);
+  const uniqueTag = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  const tempPath = `${filePath}${tmpSuffix}.${uniqueTag}`;
+
+  await fs.mkdir(directory, { recursive: true });
+
+  let handle;
+  try {
+    handle = await fs.open(tempPath, 'w', 0o644);
+    await handle.writeFile(content, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await fs.rename(tempPath, filePath);
+    return { filePath, tempPath, bytesWritten: Buffer.byteLength(content) };
+  } catch (error) {
+    if (handle) {
+      await handle.close().catch(() => undefined);
+    }
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
-export function buildMarkMaterializedPayload({ envelope, writtenShards, successfulItems }) {
+function buildMarkMaterializedPayload({ generation_id, generated_at, successfulShards }) {
   return {
-    generation_id: envelope.generation_id,
-    generated_at: envelope.generated_at,
-    written_shards: writtenShards,
-    items: successfulItems.map((item) => ({
-      vestige_id: item.vestige_id,
-      shard_key: item.shard_key,
-    })),
+    generation_id,
+    generated_at,
+    items: successfulShards.flatMap((entry) =>
+      entry.items.map((item) => ({
+        vestige_id: item.vestige_id,
+        shard_key: item.shard_key,
+      })),
+    ),
+    written_shards: successfulShards.map((entry) => entry.shard_key),
   };
 }
 
-export async function materializeExportEnvelope(envelope, config, { logger, sidecarClient } = {}) {
-  const validated = validateExportEnvelope(envelope);
-  const shardGroups = groupExportItemsByShard(validated.items);
-  const successfulItems = [];
-  const failures = [];
-  const writtenShards = [];
+async function materializeExport({
+  envelope,
+  rootDir,
+  tmpSuffix = '.tmp',
+  writeFileAtomic = writeTextFileAtomic,
+  markMaterialized,
+}) {
+  if (typeof rootDir !== 'string' || rootDir.trim().length === 0) {
+    throw new TypeError('rootDir must be a non-empty string');
+  }
+  if (typeof writeFileAtomic !== 'function') {
+    throw new TypeError('writeFileAtomic must be a function');
+  }
+  if (markMaterialized !== undefined && typeof markMaterialized !== 'function') {
+    throw new TypeError('markMaterialized must be a function when provided');
+  }
 
-  for (const group of shardGroups) {
-    const filePath = shardPathForKey(config.rootDir, group.shardKey);
+  const validated = validateExportEnvelope(envelope);
+  const grouped = groupItemsByShard(validated.items);
+  const successfulShards = [];
+  const failedShards = [];
+
+  for (const [shard_key, group] of grouped.entries()) {
+    const targetPath = path.join(rootDir, group.shard.relative_path);
     const content = renderShardSnapshot({
-      shardKey: group.shardKey,
-      scope: group.scope,
-      generationId: validated.generation_id,
-      generatedAt: validated.generated_at,
+      shard: group.shard,
+      generation_id: validated.generation_id,
+      generated_at: validated.generated_at,
       items: group.items,
     });
 
     try {
-      await atomicWriteFile(filePath, content, config.tmpSuffix);
-      writtenShards.push({ shard_key: group.shardKey, path: filePath, count: group.items.length });
-      successfulItems.push(...group.items);
+      const writeResult = await writeFileAtomic(targetPath, content, { tmpSuffix, shard: group.shard });
+      successfulShards.push({
+        shard_key,
+        file_path: targetPath,
+        bytes_written: writeResult?.bytesWritten ?? Buffer.byteLength(content),
+        items: group.items,
+      });
     } catch (error) {
-      failures.push({ shard_key: group.shardKey, error: String(error?.message ?? error) });
-      logger?.warn?.(`failed to write shard ${group.shardKey}: ${String(error?.message ?? error)}`);
+      failedShards.push({
+        shard_key,
+        file_path: targetPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
-  const markMaterializedPayload = buildMarkMaterializedPayload({
-    envelope: validated,
-    writtenShards,
-    successfulItems,
+  const callbackPayload = buildMarkMaterializedPayload({
+    generation_id: validated.generation_id,
+    generated_at: validated.generated_at,
+    successfulShards,
   });
 
-  let callbackResult = null;
-  if (sidecarClient && successfulItems.length > 0) {
-    callbackResult = await sidecarClient.markMaterialized(markMaterializedPayload);
+  let callbackError = null;
+  if (callbackPayload.items.length > 0 && markMaterialized) {
+    try {
+      await markMaterialized(callbackPayload);
+    } catch (error) {
+      callbackError = error instanceof Error ? error.message : String(error);
+    }
   }
 
   return {
-    ok: failures.length === 0,
-    generationId: validated.generation_id,
-    writtenShards,
-    successfulItems,
-    failures,
-    markMaterializedPayload,
-    callbackResult,
+    generation_id: validated.generation_id,
+    generated_at: validated.generated_at,
+    shard_count: grouped.size,
+    item_count: validated.items.length,
+    written_shards: successfulShards.map((entry) => entry.shard_key),
+    failed_shards: failedShards,
+    callback_payload: callbackPayload,
+    callback_error: callbackError,
   };
 }
+
+async function materializeExportEnvelope(envelope, exportConfig, { sidecarClient } = {}) {
+  return materializeExport({
+    envelope,
+    rootDir: exportConfig?.rootDir,
+    tmpSuffix: exportConfig?.tmpSuffix,
+    markMaterialized: sidecarClient
+      ? async (payload) => sidecarClient.markMaterialized(payload)
+      : undefined,
+  });
+}
+
+export {
+  buildMarkMaterializedPayload,
+  materializeExport,
+  materializeExportEnvelope,
+  writeTextFileAtomic,
+};

@@ -1,42 +1,137 @@
-import { dedupeCandidates } from './dedupe.js';
-import { packCandidates } from './packing.js';
-import { buildRecallQuery, buildRecentTail, extractLatestUserText } from './query-builder.js';
-import { normalizeCandidate } from './normalize.js';
-import { renderVestigeRecentPacket } from './render.js';
+import { buildRecallQuery } from './query-builder.js';
+import { normalizeEntries } from './normalize.js';
+import { collapseDuplicates, dedupeRecentAgainstStable } from './dedupe.js';
+import { packEntries } from './packing.js';
+import { renderVestigeRecent } from './render.js';
 
-function toArray(value) {
-  if (Array.isArray(value)) {
-    return value;
+function dropWithReason(entry, reason, extra = {}) {
+  return {
+    ...entry,
+    dropReasons: [...(entry.dropReasons || []), reason],
+    debug: {
+      ...(entry.debug || {}),
+      ...extra,
+    },
+  };
+}
+
+function extractSearchItems(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+  const candidateArrays = [payload.items, payload.results, payload.memories, payload.matches, payload.data];
+  for (const candidate of candidateArrays) {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+    if (candidate && typeof candidate === 'object') {
+      const nested = extractSearchItems(candidate);
+      if (nested.length > 0) {
+        return nested;
+      }
+    }
   }
   return [];
 }
 
-function extractSidecarItems(response) {
-  if (!response || typeof response !== 'object') {
-    return [];
-  }
-  return toArray(response.items ?? response.results ?? response.memories ?? response.data);
-}
+export function prepareRecentRecall(input = {}) {
+  const {
+    messages,
+    latestUserTurn,
+    recentTail,
+    routeHint,
+    projectHint,
+    recentEntries = [],
+    stableEntries = [],
+    skipMaterialized = true,
+    queryOptions = {},
+    packOptions = {},
+    renderOptions = {},
+  } = input;
 
-function mapSidecarItemToCandidate(item) {
-  return normalizeCandidate({
-    source: 'vestige',
-    statement: item.statement ?? item.text ?? item.memory ?? '',
-    score: Number.isFinite(item.score) ? item.score : Number.isFinite(item.confidence) ? item.confidence : undefined,
-    materialized: Boolean(item.materialized),
-    shardKey: item.shard_key ?? item.shardKey ?? '',
-    raw: item,
+  const { query, parts } = buildRecallQuery({
+    messages,
+    latestUserTurn,
+    recentTail,
+    routeHint,
+    projectHint,
+    ...queryOptions,
   });
-}
 
-export async function buildRecentRecallPacket({ sidecarClient, config, messages, logger, routeHint, projectHint, extraCandidates = [] }) {
-  const latestUserText = extractLatestUserText(messages);
-  if (!latestUserText) {
-    return { packet: '', kept: [], dropped: [], packedDropped: [], query: '' };
+  const normalizedRecent = normalizeEntries(recentEntries, {
+    defaultSource: 'vestige',
+    defaultLayer: 'recent',
+  });
+  const normalizedStable = normalizeEntries(stableEntries, {
+    defaultSource: 'cognee',
+    defaultLayer: 'stable',
+  });
+
+  const filteredRecent = [];
+  const dropped = [];
+
+  for (const entry of normalizedRecent) {
+    if (skipMaterialized && entry.materialized) {
+      dropped.push(dropWithReason(entry, 'skipped_materialized_recent'));
+      continue;
+    }
+
+    filteredRecent.push(entry);
   }
 
-  const recentTail = buildRecentTail(messages, config.recall.maxTailMessages);
-  const query = buildRecallQuery({ latestUserText, recentTail, routeHint, projectHint });
+  const collapsed = collapseDuplicates(filteredRecent);
+  const crossSource = dedupeRecentAgainstStable(collapsed.kept, normalizedStable);
+  const packed = packEntries(crossSource.kept, packOptions);
+  const packet = renderVestigeRecent(packed.selected, renderOptions);
+
+  return {
+    query,
+    queryParts: parts,
+    packet,
+    selected: packed.selected,
+    dropped: [
+      ...dropped,
+      ...collapsed.dropped,
+      ...crossSource.dropped,
+      ...packed.dropped,
+    ],
+    recent: normalizedRecent,
+    stable: normalizedStable,
+    stats: {
+      ...packed.stats,
+      inputRecent: normalizedRecent.length,
+      inputStable: normalizedStable.length,
+    },
+  };
+}
+
+export async function buildRecentRecallPacket({
+  sidecarClient,
+  config,
+  messages = [],
+  latestUserTurn = '',
+  recentTail = '',
+  routeHint,
+  projectHint,
+  stableEntries = [],
+  logger,
+}) {
+  const { query } = buildRecallQuery({
+    messages,
+    latestUserTurn,
+    recentTail,
+    routeHint,
+    projectHint,
+    maxChars: 600,
+  });
+
+  if (!query) {
+    return { query: '', packet: '', selected: [], dropped: [], stats: { inputRecent: 0, inputStable: stableEntries.length } };
+  }
+
   const response = await sidecarClient.search({
     query,
     maxResults: config.recall.maxResults,
@@ -44,42 +139,63 @@ export async function buildRecentRecallPacket({ sidecarClient, config, messages,
     skipMaterialized: config.recall.skipMaterialized,
   });
 
-  const vestigeCandidates = extractSidecarItems(response)
-    .map((item) => mapSidecarItemToCandidate(item))
-    .filter((candidate) => candidate.statement)
-    .filter((candidate) => !(config.recall.skipMaterialized && candidate.materialized));
+  if (!response?.ok) {
+    logger?.warn?.(`recent recall search failed: ${response?.error || 'unknown error'}`);
+    return { query, packet: '', selected: [], dropped: [], stats: { inputRecent: 0, inputStable: stableEntries.length }, response };
+  }
 
-  const merged = [...vestigeCandidates, ...toArray(extraCandidates).map((item) => normalizeCandidate(item))];
-  const deduped = dedupeCandidates(merged);
-  const packed = packCandidates(deduped.kept, {
-    bucketPriority: config.packing.bucketPriority,
-    softTarget: config.recall.softTarget,
-    hardCap: config.recall.hardCap,
+  const recentEntries = extractSearchItems(response.data);
+  const result = prepareRecentRecall({
+    messages,
+    latestUserTurn,
+    recentTail,
+    routeHint,
+    projectHint,
+    recentEntries,
+    stableEntries,
+    skipMaterialized: config.recall.skipMaterialized,
+    packOptions: {
+      bucketPriority: config.packing.bucketPriority,
+      maxItems: config.recall.maxResults,
+      softTargetTokens: config.recall.softTarget,
+      hardCapTokens: config.recall.hardCap,
+      maxChars: Math.max(config.recall.hardCap * 4, 800),
+    },
+    renderOptions: {
+      maxChars: Math.max(config.recall.hardCap * 4, 800),
+    },
   });
 
-  const packet = renderVestigeRecentPacket(packed.kept.filter((candidate) => candidate.source === 'vestige'));
-
-  logger?.debug?.(`recall query=${query} raw=${vestigeCandidates.length} deduped=${deduped.kept.length} kept=${packed.kept.length}`);
-
+  logger?.debug?.(`recent recall query=${query} selected=${result.selected.length} dropped=${result.dropped.length}`);
   return {
-    query,
-    packet,
-    kept: packed.kept,
-    dropped: deduped.dropped,
-    packedDropped: packed.dropped,
-    rawVestigeCandidates: vestigeCandidates,
+    ...result,
+    response,
   };
 }
 
-export function buildAgentEndPayload({ messages, ctx }) {
-  const latestUserText = extractLatestUserText(messages);
-  const recentTail = buildRecentTail(messages, 6);
+export function buildAgentEndPayload({ messages = [], ctx, event } = {}) {
+  const { queryParts } = prepareRecentRecall({ messages, queryOptions: { maxChars: 500 } });
+  const latestUserTurn = queryParts?.latest || '';
+  const tail = queryParts?.tail || '';
+  const latestAssistantTurn = Array.isArray(messages)
+    ? [...messages].reverse().find((message) => String(message?.role || message?.type || '').toLowerCase() === 'assistant')
+    : null;
+  const assistantText = typeof latestAssistantTurn?.content === 'string'
+    ? latestAssistantTurn.content
+    : Array.isArray(latestAssistantTurn?.content)
+      ? latestAssistantTurn.content.map((part) => part?.text || '').join(' ').trim()
+      : latestAssistantTurn?.text || '';
+
   return {
     session_key: ctx?.sessionKey,
+    session_id: ctx?.sessionId,
     agent_id: ctx?.agentId,
-    latest_user_turn: latestUserText,
-    recent_tail: recentTail,
+    latest_user_turn: latestUserTurn,
+    latest_assistant_turn: String(assistantText || '').trim(),
+    recent_tail: tail,
+    success: Boolean(event?.success),
     trigger: ctx?.trigger,
     channel_id: ctx?.channelId,
+    message_provider: ctx?.messageProvider,
   };
 }

@@ -1,56 +1,66 @@
-function formatMetadata(candidate) {
-  const extras = [];
-  if (candidate.shardKey) {
-    extras.push(`shard=${candidate.shardKey}`);
+function ensureSentence(text) {
+  const value = String(text || '').trim();
+  if (!value) {
+    return '';
   }
-  if (Number.isFinite(candidate.score)) {
-    extras.push(`score=${candidate.score.toFixed(2)}`);
+  if (/[.!?]$/.test(value)) {
+    return value;
   }
-  return extras.length > 0 ? ` (${extras.join(', ')})` : '';
+  return `${value}.`;
 }
 
-export function renderVestigeRecentPacket(candidates = []) {
-  const lines = candidates
-    .filter((candidate) => typeof candidate.statement === 'string' && candidate.statement.trim().length > 0)
-    .map((candidate) => `- ${candidate.statement}${formatMetadata(candidate)}`);
+function sanitizeLabel(label) {
+  return String(label || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+export function renderVestigeBullet(entry) {
+  const text = ensureSentence(entry?.text || entry?.statement);
+  if (!text) {
+    return '';
+  }
+
+  const label = sanitizeLabel(entry?.label);
+  if (!label) {
+    return `- ${text}`;
+  }
+
+  return `- [${label}] ${text}`;
+}
+
+export function renderVestigeRecent(entries = [], options = {}) {
+  const { maxChars = 1400 } = options;
+  const lines = entries
+    .map((entry) => renderVestigeBullet(entry))
+    .filter(Boolean);
 
   if (lines.length === 0) {
     return '';
   }
 
-  return ['<vestige_recent>', ...lines, '</vestige_recent>'].join('\n');
-}
+  const packet = `<vestige_recent>\n${lines.join('\n')}\n</vestige_recent>`;
+  if (packet.length <= maxChars) {
+    return packet;
+  }
 
-function quoteYaml(value) {
-  return JSON.stringify(String(value ?? ''));
-}
+  const boundedLines = [];
+  let total = '<vestige_recent>\n</vestige_recent>'.length;
 
-export function renderShardSnapshot({ shardKey, scope, generationId, generatedAt, items }) {
-  const header = [
-    '---',
-    `source: ${quoteYaml('vestige')}`,
-    `type: ${quoteYaml('stable-memory-snapshot')}`,
-    `version: ${quoteYaml('1')}`,
-    `generated_at: ${quoteYaml(generatedAt)}`,
-    `generation_id: ${quoteYaml(generationId)}`,
-    `scope: ${quoteYaml(scope)}`,
-    `shard_key: ${quoteYaml(shardKey)}`,
-    '---',
-    '',
-  ];
+  for (const line of lines) {
+    const lineSize = line.length + 1;
+    if (total + lineSize > maxChars) {
+      break;
+    }
 
-  const body = [...items]
-    .sort((left, right) => String(left.vestige_id ?? '').localeCompare(String(right.vestige_id ?? '')))
-    .map((item) => {
-      const meta = [
-        `category=${item.category}`,
-        `confidence=${Number.isFinite(item.confidence) ? item.confidence.toFixed(2) : 'n/a'}`,
-      ];
-      if (item.transfer_reason) {
-        meta.push(`transfer_reason=${item.transfer_reason}`);
-      }
-      return `- ${item.statement} <!-- ${meta.join('; ')} -->`;
-    });
+    boundedLines.push(line);
+    total += lineSize;
+  }
 
-  return [...header, ...body, ''].join('\n');
+  if (boundedLines.length === 0) {
+    return '';
+  }
+
+  return `<vestige_recent>\n${boundedLines.join('\n')}\n</vestige_recent>`;
 }

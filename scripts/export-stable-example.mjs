@@ -18,11 +18,13 @@ const sidecarClient = new VestigeSidecarClient({
   baseUrl: config.baseUrl,
   timeoutMs: config.timeoutMs,
   logger,
-  failSoft: false,
 });
 
 const sessionKey = process.env.SESSION_KEY;
 await sidecarClient.consolidate({ session_key: sessionKey, reason: 'explicit_export_script' });
-const envelope = await sidecarClient.exportStable({ session_key: sessionKey, reason: 'explicit_export_script' });
-const result = await materializeExportEnvelope(envelope, config.export, { logger, sidecarClient });
+const exportResult = await sidecarClient.exportStable({ session_key: sessionKey, reason: 'explicit_export_script' });
+if (!exportResult.ok) {
+  throw new Error(exportResult.error || 'exportStable failed');
+}
+const result = await materializeExportEnvelope(exportResult.data, config.export, { sidecarClient });
 console.log(JSON.stringify(result, null, 2));

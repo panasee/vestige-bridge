@@ -1,25 +1,27 @@
-export function createLogger(apiLogger, { debug = false } = {}) {
+export function createLogger(apiLogger, { debug = false, prefix = '[vestige-bridge]' } = {}) {
   const logger = apiLogger ?? console;
+
+  function log(method, fallbackMethod, args) {
+    if (typeof logger[method] === 'function') {
+      logger[method](prefix, ...args);
+      return;
+    }
+    logger[fallbackMethod]?.(prefix, ...args);
+  }
 
   return {
     debug: (...args) => {
       if (!debug) {
         return;
       }
-      if (typeof logger.debug === 'function') {
-        logger.debug('[vestige-bridge]', ...args);
-        return;
-      }
-      logger.log?.('[vestige-bridge][debug]', ...args);
+      log('debug', 'log', args);
     },
-    info: (...args) => {
-      logger.info?.('[vestige-bridge]', ...args);
-    },
-    warn: (...args) => {
-      logger.warn?.('[vestige-bridge]', ...args);
-    },
-    error: (...args) => {
-      logger.error?.('[vestige-bridge]', ...args);
+    info: (...args) => log('info', 'log', args),
+    warn: (...args) => log('warn', 'log', args),
+    error: (...args) => log('error', 'log', args),
+    exception: (message, error) => {
+      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      log('error', 'log', [message, detail]);
     },
   };
 }

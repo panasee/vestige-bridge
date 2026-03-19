@@ -3,9 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "OpenClaw plugin bridge for Vestige recent memory recall and stable export materialization.",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "description": "OpenClaw plugin bridge for Vestige recent memory recall and explicit stable export materialization.",
   "scripts": {
     "test": "node --test",
+    "check": "node --eval \"import('./src/index.js').then(() => console.log('ok'))\"",
+    "health": "node --input-type=module --eval \"import('./src/index.js').then(async ({ createVestigeBridgeRuntime }) => { const runtime = createVestigeBridgeRuntime({ pluginConfig: {} }); const result = await runtime.health(); console.log(JSON.stringify(result, null, 2)); }).catch((error) => { console.error(error); process.exitCode = 1; })\"",
     "export:example": "node scripts/export-stable-example.mjs"
-  }
+  },
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "vestige",
+    "memory"
+  ],
+  "license": "UNLICENSED"
 }

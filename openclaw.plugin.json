@@ -1,11 +1,15 @@
 {
   "id": "vestige-bridge",
   "name": "Vestige Bridge",
-  "description": "Recent-memory bridge for Vestige sidecar recall plus explicit stable export materialization.",
+  "description": "Bridge recent cognitive memory from a Vestige sidecar into OpenClaw runtime hooks.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable Vestige Bridge runtime hooks."
+      },
       "enabledAgents": {
         "type": "array",
         "items": { "type": "string" },
@@ -13,25 +17,25 @@
       },
       "baseUrl": {
         "type": "string",
-        "description": "Base URL for the Vestige sidecar, for example http://127.0.0.1:8765."
+        "description": "Base URL for the Vestige sidecar HTTP service."
       },
       "timeoutMs": {
         "type": "integer",
-        "minimum": 250,
-        "description": "HTTP timeout for Vestige sidecar calls."
+        "minimum": 100,
+        "description": "HTTP timeout for sidecar requests in milliseconds."
       },
       "debug": {
         "type": "boolean",
-        "description": "Enable verbose Vestige bridge debug logging."
+        "description": "Enable verbose plugin logging."
       },
       "recall": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "maxResults": { "type": "integer", "minimum": 1 },
-          "maxTokens": { "type": "integer", "minimum": 64 },
-          "softTarget": { "type": "integer", "minimum": 64 },
-          "hardCap": { "type": "integer", "minimum": 64 },
+          "maxTokens": { "type": "integer", "minimum": 1 },
+          "softTarget": { "type": "integer", "minimum": 1 },
+          "hardCap": { "type": "integer", "minimum": 1 },
           "skipMaterialized": { "type": "boolean" },
           "maxTailMessages": { "type": "integer", "minimum": 1 }
         }
@@ -42,18 +46,16 @@
         "properties": {
           "rootDir": {
             "type": "string",
-            "description": "Root directory for materialized shard snapshots."
+            "description": "Root directory for explicit export snapshots."
           },
-          "tmpSuffix": { "type": "string" },
-          "enableExplicit": { "type": "boolean" }
-        }
-      },
-      "behavior": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "failSoft": { "type": "boolean" },
-          "enableAgentEndIngest": { "type": "boolean" }
+          "tmpSuffix": {
+            "type": "string",
+            "description": "Temporary suffix used for atomic export writes."
+          },
+          "enableExplicit": {
+            "type": "boolean",
+            "description": "Enable the explicit export runtime helper."
+          }
         }
       },
       "packing": {
@@ -63,33 +65,35 @@
           "bucketPriority": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Bucket ordering for packing recent recall candidates."
+            "description": "Priority order used by recent-memory packing."
+          }
+        }
+      },
+      "behavior": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "failSoft": {
+            "type": "boolean",
+            "description": "Log and continue instead of throwing on sidecar failures."
+          },
+          "enableAgentEndIngest": {
+            "type": "boolean",
+            "description": "Enable best-effort smart-ingest during agent_end."
           }
         }
       }
     }
   },
   "uiHints": {
-    "baseUrl": {
-      "label": "Vestige Sidecar URL"
-    },
-    "timeoutMs": {
-      "label": "Timeout (ms)"
-    },
-    "debug": {
-      "label": "Debug Logging"
-    },
-    "recall": {
-      "label": "Recall Settings"
-    },
-    "export": {
-      "label": "Export Settings"
-    },
-    "behavior": {
-      "label": "Behavior"
-    },
-    "packing": {
-      "label": "Packing"
-    }
+    "enabled": { "label": "Enabled" },
+    "enabledAgents": { "label": "Enabled Agents" },
+    "baseUrl": { "label": "Sidecar Base URL" },
+    "timeoutMs": { "label": "Timeout (ms)" },
+    "debug": { "label": "Debug Logging" },
+    "recall": { "label": "Recall" },
+    "export": { "label": "Export" },
+    "packing": { "label": "Packing" },
+    "behavior": { "label": "Behavior" }
   }
 }
