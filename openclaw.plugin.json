@@ -1,0 +1,95 @@
+{
+  "id": "vestige-bridge",
+  "name": "Vestige Bridge",
+  "description": "Recent-memory bridge for Vestige sidecar recall plus explicit stable export materialization.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabledAgents": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Only these agent ids use Vestige recall. Empty or omitted means all agents."
+      },
+      "baseUrl": {
+        "type": "string",
+        "description": "Base URL for the Vestige sidecar, for example http://127.0.0.1:8765."
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 250,
+        "description": "HTTP timeout for Vestige sidecar calls."
+      },
+      "debug": {
+        "type": "boolean",
+        "description": "Enable verbose Vestige bridge debug logging."
+      },
+      "recall": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxResults": { "type": "integer", "minimum": 1 },
+          "maxTokens": { "type": "integer", "minimum": 64 },
+          "softTarget": { "type": "integer", "minimum": 64 },
+          "hardCap": { "type": "integer", "minimum": 64 },
+          "skipMaterialized": { "type": "boolean" },
+          "maxTailMessages": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "export": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "rootDir": {
+            "type": "string",
+            "description": "Root directory for materialized shard snapshots."
+          },
+          "tmpSuffix": { "type": "string" },
+          "enableExplicit": { "type": "boolean" }
+        }
+      },
+      "behavior": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "failSoft": { "type": "boolean" },
+          "enableAgentEndIngest": { "type": "boolean" }
+        }
+      },
+      "packing": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bucketPriority": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Bucket ordering for packing recent recall candidates."
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "Vestige Sidecar URL"
+    },
+    "timeoutMs": {
+      "label": "Timeout (ms)"
+    },
+    "debug": {
+      "label": "Debug Logging"
+    },
+    "recall": {
+      "label": "Recall Settings"
+    },
+    "export": {
+      "label": "Export Settings"
+    },
+    "behavior": {
+      "label": "Behavior"
+    },
+    "packing": {
+      "label": "Packing"
+    }
+  }
+}

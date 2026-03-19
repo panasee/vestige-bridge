@@ -1,0 +1,11 @@
+{
+  "name": "vestige-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw plugin bridge for Vestige recent memory recall and stable export materialization.",
+  "scripts": {
+    "test": "node --test",
+    "export:example": "node scripts/export-stable-example.mjs"
+  }
+}
