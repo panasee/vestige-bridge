@@ -17,7 +17,11 @@
       },
       "baseUrl": {
         "type": "string",
-        "description": "Base URL for the Vestige sidecar HTTP service."
+        "description": "Base URL for the Vestige MCP HTTP transport."
+      },
+      "authTokenPath": {
+        "type": "string",
+        "description": "Path to the Vestige MCP auth token file when VESTIGE_AUTH_TOKEN is not set."
       },
       "timeoutMs": {
         "type": "integer",

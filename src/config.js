@@ -17,7 +17,8 @@ const DEFAULT_BUCKET_PRIORITY = Object.freeze([
 export const DEFAULT_CONFIG = Object.freeze({
   enabled: true,
   enabledAgents: [],
-  baseUrl: 'http://127.0.0.1:8765',
+  baseUrl: 'http://127.0.0.1:3928',
+  authTokenPath: path.join(process.env.HOME || '', '.local', 'share', 'core', 'auth_token'),
   timeoutMs: 5000,
   debug: false,
   recall: Object.freeze({
@@ -152,6 +153,10 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
     firstDefined(rawConfig.baseUrl, env('VESTIGE_BRIDGE_BASE_URL'), env('VESTIGE_BASE_URL')),
     DEFAULT_CONFIG.baseUrl,
   );
+  const authTokenPath = parseString(
+    firstDefined(rawConfig.authTokenPath, env('VESTIGE_BRIDGE_AUTH_TOKEN_PATH')),
+    DEFAULT_CONFIG.authTokenPath,
+  );
   const timeoutMs = parseInteger(
     firstDefined(rawConfig.timeoutMs, env('VESTIGE_BRIDGE_TIMEOUT_MS')),
     DEFAULT_CONFIG.timeoutMs,
@@ -221,6 +226,7 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
     enabled,
     enabledAgents,
     baseUrl,
+    authTokenPath,
     timeoutMs,
     debug,
     recall,

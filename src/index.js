@@ -115,7 +115,7 @@ async function runExplicitExport(runtime, payload = {}) {
       ok: false,
       consolidate,
       export: exportResult,
-      reason: 'export_stable_failed',
+      reason: exportResult?.status === 501 ? 'export_stable_unsupported' : 'export_stable_failed',
     };
   }
 
@@ -139,6 +139,7 @@ export function createVestigeBridgeRuntime(options = {}) {
   });
   const client = createSidecarClient({
     baseUrl: config.baseUrl,
+    authTokenPath: config.authTokenPath,
     timeoutMs: config.timeoutMs,
     logger,
     fetchImpl: options.fetchImpl,

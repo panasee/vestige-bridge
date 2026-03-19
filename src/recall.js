@@ -186,16 +186,29 @@ export function buildAgentEndPayload({ messages = [], ctx, event } = {}) {
       ? latestAssistantTurn.content.map((part) => part?.text || '').join(' ').trim()
       : latestAssistantTurn?.text || '';
 
+  const sections = [
+    'OpenClaw turn checkpoint',
+    ctx?.sessionKey ? `session_key: ${ctx.sessionKey}` : '',
+    ctx?.agentId ? `agent_id: ${ctx.agentId}` : '',
+    ctx?.trigger ? `trigger: ${ctx.trigger}` : '',
+    latestUserTurn ? `latest_user_turn: ${latestUserTurn}` : '',
+    assistantText ? `latest_assistant_turn: ${String(assistantText).trim()}` : '',
+    tail ? `recent_tail: ${tail}` : '',
+    event?.success === false ? 'turn_outcome: failed' : 'turn_outcome: success',
+  ].filter(Boolean);
+
+  const tags = [
+    'source:openclaw',
+    'lane:recent',
+    ctx?.agentId ? `agent:${ctx.agentId}` : null,
+    ctx?.trigger ? `trigger:${ctx.trigger}` : null,
+    ctx?.channelId ? `channel:${ctx.channelId}` : null,
+  ].filter(Boolean);
+
   return {
-    session_key: ctx?.sessionKey,
-    session_id: ctx?.sessionId,
-    agent_id: ctx?.agentId,
-    latest_user_turn: latestUserTurn,
-    latest_assistant_turn: String(assistantText || '').trim(),
-    recent_tail: tail,
-    success: Boolean(event?.success),
-    trigger: ctx?.trigger,
-    channel_id: ctx?.channelId,
-    message_provider: ctx?.messageProvider,
+    content: sections.join('\n'),
+    node_type: 'note',
+    tags,
+    source: ctx?.sessionKey ? `openclaw:${ctx.sessionKey}` : 'openclaw:agent_end',
   };
 }
