@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 const LEDGER_VERSION = 1;
-const DEFAULT_LEDGER_FILENAME = '.materialization-ledger.json';
+const DEFAULT_STATE_SUBDIR = path.join('openclaw', 'vestige-bridge', 'ledgers');
 
 function ensureRecord(value, fallback = {}) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
@@ -16,24 +18,42 @@ function normalizeLedgerEntry(id, entry = {}) {
     generation_id: typeof record.generation_id === 'string' ? record.generation_id : null,
     generated_at: typeof record.generated_at === 'string' ? record.generated_at : null,
     materialized_at: typeof record.materialized_at === 'string' ? record.materialized_at : null,
-    source_export_path: typeof record.source_export_path === 'string' ? record.source_export_path : null,
-    category: typeof record.category === 'string' ? record.category : null,
-    statement: typeof record.statement === 'string' ? record.statement : null,
-    confidence: typeof record.confidence === 'number' && Number.isFinite(record.confidence) ? record.confidence : null,
   };
+}
+
+function resolveStateRoot() {
+  const xdgStateHome = typeof process.env.XDG_STATE_HOME === 'string' && process.env.XDG_STATE_HOME.trim().length > 0
+    ? process.env.XDG_STATE_HOME.trim()
+    : null;
+  return xdgStateHome || path.join(os.homedir(), '.local', 'state');
+}
+
+function resolveDefaultLedgerDir() {
+  return path.join(resolveStateRoot(), DEFAULT_STATE_SUBDIR);
+}
+
+function buildLedgerName(rootDir) {
+  const normalizedRoot = path.resolve(String(rootDir || process.cwd()));
+  const digest = createHash('sha256').update(normalizedRoot).digest('hex').slice(0, 20);
+  return `${digest}.json`;
 }
 
 export function resolveLedgerPath(exportConfig = {}) {
   const rootDir = typeof exportConfig.rootDir === 'string' && exportConfig.rootDir.trim().length > 0
     ? exportConfig.rootDir
     : process.cwd();
+  const defaultDir = resolveDefaultLedgerDir();
   const configured = typeof exportConfig.ledgerPath === 'string' && exportConfig.ledgerPath.trim().length > 0
     ? exportConfig.ledgerPath.trim()
-    : DEFAULT_LEDGER_FILENAME;
+    : null;
+
+  if (!configured) {
+    return path.join(defaultDir, buildLedgerName(rootDir));
+  }
 
   return path.isAbsolute(configured)
     ? configured
-    : path.join(rootDir, configured);
+    : path.join(defaultDir, configured);
 }
 
 export function createEmptyLedger() {
@@ -73,7 +93,7 @@ export async function loadMaterializationLedger(exportConfig = {}) {
 export async function saveMaterializationLedger(ledgerPath, data) {
   const targetPath = typeof ledgerPath === 'string' && ledgerPath.trim().length > 0
     ? ledgerPath
-    : DEFAULT_LEDGER_FILENAME;
+    : path.join(resolveDefaultLedgerDir(), buildLedgerName(process.cwd()));
   const directory = path.dirname(targetPath);
   const payload = {
     version: LEDGER_VERSION,
@@ -81,8 +101,16 @@ export async function saveMaterializationLedger(ledgerPath, data) {
     items: ensureRecord(data?.items),
   };
 
-  await fs.mkdir(directory, { recursive: true });
-  await fs.writeFile(targetPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  await fs.chmod(directory, 0o700).catch(() => undefined);
+
+  const handle = await fs.open(targetPath, 'w', 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  } finally {
+    await handle.close();
+  }
+  await fs.chmod(targetPath, 0o600).catch(() => undefined);
 
   return {
     path: targetPath,
@@ -99,7 +127,6 @@ export function updateMaterializationLedger({
   ledgerData,
   materialized,
   envelope,
-  exportPath = null,
   now = new Date().toISOString(),
 }) {
   const ledger = createEmptyLedger();
@@ -111,27 +138,16 @@ export function updateMaterializationLedger({
   const payloadItems = Array.isArray(materialized?.callback_payload?.items)
     ? materialized.callback_payload.items
     : [];
-  const envelopeItems = new Map(
-    Array.isArray(envelope?.items)
-      ? envelope.items.map((item) => [item.vestige_id, item])
-      : [],
-  );
-
   for (const item of payloadItems) {
     if (!item || typeof item !== 'object' || typeof item.vestige_id !== 'string' || !item.vestige_id) {
       continue;
     }
 
-    const source = envelopeItems.get(item.vestige_id) || {};
     ledger.items[item.vestige_id] = normalizeLedgerEntry(item.vestige_id, {
       shard_key: item.shard_key,
       generation_id: materialized?.generation_id,
       generated_at: materialized?.generated_at,
       materialized_at: now,
-      source_export_path: exportPath,
-      category: source.category,
-      statement: source.statement,
-      confidence: source.confidence,
     });
   }
 

@@ -26,16 +26,30 @@
 3. Render shard snapshots under `memory/vestige/*` (overwrite semantics).
 4. Update local ledger to remember which Vestige ids were materialized.
 
+By default the ledger lives in a **user-private state directory**, not in the repo and not under the agent workspace:
+
+- `~/.local/state/openclaw/vestige-bridge/ledgers/<hash-of-rootDir>.json`
+- honors `XDG_STATE_HOME` when set
+- directory/file permissions are tightened to `0700` / `0600`
+
 ### Why the ledger?
 
 We do not modify the Vestige repo or write back `mark_materialized`, so the bridge keeps a local ledger to avoid re-injecting already-materialized nodes into recent recall packets.
+
+The ledger is intentionally minimal and stores only:
+
+- `vestige_id` (as the map key)
+- `shard_key`
+- `generation_id`
+- `generated_at`
+- `materialized_at`
 
 ## Configuration
 
 The `export` config supports:
 
 - `rootDir`: output directory for shard snapshots
-- `ledgerPath`: local materialization ledger file (default: `.materialization-ledger.json` under `rootDir`)
+- `ledgerPath`: optional override for the local materialization ledger file (default: hashed file under the user state dir)
 - `tmpSuffix`: temp suffix for atomic writes
 - `enableExplicit`: enable explicit export helper
 - `keepSourceExports`: keep raw Vestige export files when bridge generated the path

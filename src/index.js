@@ -162,7 +162,6 @@ async function runExplicitExport(runtime, payload = {}) {
     ledgerData: loadedLedger.data,
     materialized,
     envelope: adapted.envelope,
-    exportPath: resolvedExportPath,
   });
   const savedLedger = await saveMaterializationLedger(loadedLedger.path, nextLedger);
 

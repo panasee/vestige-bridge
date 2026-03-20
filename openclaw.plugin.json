@@ -54,7 +54,7 @@
           },
           "ledgerPath": {
             "type": "string",
-            "description": "Path for the local materialization ledger used to suppress already-materialized Vestige ids."
+            "description": "Optional override for the local materialization ledger. By default the bridge stores a hashed ledger file under the user state dir (~/.local/state/openclaw/vestige-bridge/ledgers or XDG_STATE_HOME)."
           },
           "tmpSuffix": {
             "type": "string",

@@ -31,7 +31,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   }),
   export: Object.freeze({
     rootDir: 'memory/vestige',
-    ledgerPath: '.materialization-ledger.json',
+    ledgerPath: undefined,
     tmpSuffix: '.tmp',
     enableExplicit: true,
     keepSourceExports: false,
@@ -208,7 +208,7 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
   );
   const exportConfig = {
     rootDir,
-    ledgerPath: path.isAbsolute(ledgerPathRaw) ? ledgerPathRaw : path.resolve(rootDir, ledgerPathRaw),
+    ledgerPath: ledgerPathRaw,
     tmpSuffix: parseString(firstDefined(rawExport.tmpSuffix, env('VESTIGE_BRIDGE_EXPORT_TMP_SUFFIX')), DEFAULT_CONFIG.export.tmpSuffix),
     enableExplicit: parseBoolean(
       firstDefined(rawExport.enableExplicit, env('VESTIGE_BRIDGE_EXPORT_ENABLE_EXPLICIT')),
