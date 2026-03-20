@@ -135,7 +135,7 @@ function determineLifecycleReason(node, label) {
   return `${label}_tagged`; 
 }
 
-function buildBaseItem(node, classification, options = {}) {
+function buildBaseItem(node, classification) {
   const tags = uniqueStrings(node.tags);
   return {
     vestige_id: node.id,
@@ -156,7 +156,6 @@ function buildBaseItem(node, classification, options = {}) {
       {
         vestige_id: node.id,
         source: node.source || null,
-        export_path: options.exportPath || null,
       },
     ],
   };
@@ -299,7 +298,7 @@ export function classifyKnowledgeNode(rawNode, options = {}) {
     return null;
   }
 
-  const item = buildBaseItem(node, fallbackClassification, options);
+  const item = buildBaseItem(node, fallbackClassification);
   if (fallbackClassification.event_date) {
     item.event_date = fallbackClassification.event_date;
   }

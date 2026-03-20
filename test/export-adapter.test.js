@@ -10,13 +10,14 @@ import {
   classifyKnowledgeNode,
 } from '../src/export-adapter.js';
 
-test('classifyKnowledgeNode maps tagged preference into global preferences shard', () => {
+test('classifyKnowledgeNode maps tagged preference into global preferences shard without export path leakage', () => {
   const item = classifyKnowledgeNode({
     id: 'pref-1',
     content: 'User prefers concise, delta-first technical replies.',
     nodeType: 'fact',
     retentionStrength: 0.82,
     createdAt: '2026-03-20T00:00:00Z',
+    source: 'openclaw:test',
     tags: ['preference', 'workflow'],
   }, {
     exportPath: '/tmp/export.json',
@@ -25,7 +26,10 @@ test('classifyKnowledgeNode maps tagged preference into global preferences shard
   assert.equal(item.shard_key, 'global/preferences');
   assert.equal(item.category, 'preference');
   assert.match(item.transfer_reason, /preference_/i);
-  assert.equal(item.source_refs[0].export_path, '/tmp/export.json');
+  assert.deepEqual(item.source_refs, [{
+    vestige_id: 'pref-1',
+    source: 'openclaw:test',
+  }]);
 });
 
 test('classifyKnowledgeNode maps project-tagged node into project shard', () => {
