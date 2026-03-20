@@ -52,6 +52,10 @@
             "type": "string",
             "description": "Root directory for explicit export snapshots."
           },
+          "ledgerPath": {
+            "type": "string",
+            "description": "Path for the local materialization ledger used to suppress already-materialized Vestige ids."
+          },
           "tmpSuffix": {
             "type": "string",
             "description": "Temporary suffix used for atomic export writes."
@@ -59,6 +63,10 @@
           "enableExplicit": {
             "type": "boolean",
             "description": "Enable the explicit export runtime helper."
+          },
+          "keepSourceExports": {
+            "type": "boolean",
+            "description": "Keep raw Vestige export JSON files after adaptation instead of deleting auto-generated ones."
           }
         }
       },

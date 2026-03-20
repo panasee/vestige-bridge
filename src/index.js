@@ -1,4 +1,13 @@
+import fs from 'node:fs/promises';
+
 import { resolvePluginConfig, shouldApplyToAgent } from './config.js';
+import { adaptExportFile } from './export-adapter.js';
+import {
+  collectMaterializedIds,
+  loadMaterializationLedger,
+  saveMaterializationLedger,
+  updateMaterializationLedger,
+} from './ledger.js';
 import { createLogger } from './logger.js';
 import { materializeExportEnvelope } from './materialization.js';
 import { buildAgentEndPayload, buildRecentRecallPacket } from './recall.js';
@@ -86,6 +95,14 @@ async function failSoft(runtime, hookName, work) {
   }
 }
 
+function buildGenerationId(generatedAt) {
+  return `${generatedAt}--vestige-export`;
+}
+
+function buildExportFileName(generatedAt) {
+  return `vestige-bridge-${generatedAt.replace(/[:.]/g, '-').replace(/\+00-00$/, 'Z')}.json`;
+}
+
 async function runExplicitExport(runtime, payload = {}) {
   const { client, config } = runtime;
   if (!config.export.enableExplicit) {
@@ -96,18 +113,22 @@ async function runExplicitExport(runtime, payload = {}) {
     };
   }
 
+  const generatedAt = new Date().toISOString();
+  const generationId = buildGenerationId(generatedAt);
+  const exportFilePath = typeof payload.exportPayload?.path === 'string' && payload.exportPayload.path.trim().length > 0
+    ? payload.exportPayload.path.trim()
+    : buildExportFileName(generatedAt);
+
   const consolidate = payload.consolidate === false
     ? { ok: true, skipped: true, reason: 'consolidate_disabled' }
     : await client.consolidate({
         ...(payload.consolidatePayload && typeof payload.consolidatePayload === 'object' ? payload.consolidatePayload : {}),
-        session_key: payload.sessionKey,
-        reason: payload.reason ?? 'explicit_export',
       });
 
-  const exportResult = await client.exportStable({
+  const exportResult = await client.exportMemories({
+    format: 'json',
     ...(payload.exportPayload && typeof payload.exportPayload === 'object' ? payload.exportPayload : {}),
-    session_key: payload.sessionKey,
-    reason: payload.reason ?? 'explicit_export',
+    path: exportFilePath,
   });
 
   if (!exportResult?.ok) {
@@ -115,19 +136,50 @@ async function runExplicitExport(runtime, payload = {}) {
       ok: false,
       consolidate,
       export: exportResult,
-      reason: exportResult?.status === 501 ? 'export_stable_unsupported' : 'export_stable_failed',
+      reason: 'export_failed',
     };
   }
 
-  const materialized = await materializeExportEnvelope(exportResult.data, config.export, {
-    sidecarClient: client,
+  const resolvedExportPath = exportResult.data?.path;
+  if (!resolvedExportPath) {
+    return {
+      ok: false,
+      consolidate,
+      export: exportResult,
+      reason: 'export_missing_path',
+    };
+  }
+
+  const adapted = await adaptExportFile({
+    exportPath: resolvedExportPath,
+    generationId,
+    generatedAt,
   });
+
+  const materialized = await materializeExportEnvelope(adapted.envelope, config.export);
+  const loadedLedger = await loadMaterializationLedger(config.export);
+  const nextLedger = updateMaterializationLedger({
+    ledgerData: loadedLedger.data,
+    materialized,
+    envelope: adapted.envelope,
+    exportPath: resolvedExportPath,
+  });
+  const savedLedger = await saveMaterializationLedger(loadedLedger.path, nextLedger);
+
+  if (!config.export.keepSourceExports && resolvedExportPath && (!payload.exportPayload || !payload.exportPayload.path)) {
+    await fs.rm(resolvedExportPath, { force: true }).catch(() => undefined);
+  }
 
   return {
     ok: materialized.failed_shards.length === 0,
     consolidate,
     export: exportResult,
+    adapted,
     materialized,
+    ledger: {
+      path: savedLedger.path,
+      count: Object.keys(savedLedger.data.items).length,
+    },
   };
 }
 
@@ -154,11 +206,13 @@ export function createVestigeBridgeRuntime(options = {}) {
     }
 
     return failSoft({ config, logger, client }, 'before_prompt_build', async () => {
+      const ledger = await loadMaterializationLedger(config.export);
       const result = await buildRecentRecallPacket({
         sidecarClient: client,
         config,
         messages: Array.isArray(event?.messages) ? event.messages : [],
         latestUserTurn: typeof event?.prompt === 'string' ? event.prompt : '',
+        materializedIds: collectMaterializedIds(ledger.data),
         logger,
       });
 
@@ -191,7 +245,7 @@ export function createVestigeBridgeRuntime(options = {}) {
         event,
       });
 
-      if (ingestPayload.latest_user_turn || ingestPayload.recent_tail) {
+      if (ingestPayload.content) {
         await runBestEffortOperation('smartIngest', {
           ...ingestPayload,
           metadata: buildSessionMetadata(ctx),

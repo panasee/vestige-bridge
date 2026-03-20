@@ -94,8 +94,10 @@ test('prepareRecentRecall skips materialized recent items and returns packet plu
     latestUserTurn: 'Continue the vestige-bridge recall implementation.',
     recentTail: 'We already locked the shard schema and conflict rules.',
     projectHint: 'vestige-bridge',
+    materializedIds: new Set(['recall-1']),
     recentEntries: [
       {
+        id: 'recall-1',
         source: 'vestige',
         category: 'preference',
         statement: 'User wants compact recall packets.',
@@ -117,8 +119,9 @@ test('prepareRecentRecall skips materialized recent items and returns packet plu
     ],
   });
 
-  assert.match(result.packet, /^<vestige_recent>/);
-  assert.equal(result.selected.length, 1);
+  assert.equal(result.packet, '');
+  assert.equal(result.selected.length, 0);
+  assert.ok(result.dropped.some((entry) => entry.dropReasons.includes('suppressed_by_materialization_ledger')));
   assert.ok(result.dropped.some((entry) => entry.dropReasons.includes('skipped_materialized_recent')));
   assert.match(result.query, /vestige-bridge/i);
 });

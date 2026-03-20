@@ -46,6 +46,7 @@ export function prepareRecentRecall(input = {}) {
     projectHint,
     recentEntries = [],
     stableEntries = [],
+    materializedIds = undefined,
     skipMaterialized = true,
     queryOptions = {},
     packOptions = {},
@@ -72,8 +73,16 @@ export function prepareRecentRecall(input = {}) {
 
   const filteredRecent = [];
   const dropped = [];
+  const materializedIdSet = materializedIds instanceof Set
+    ? materializedIds
+    : new Set(Array.isArray(materializedIds) ? materializedIds.filter(Boolean) : []);
 
   for (const entry of normalizedRecent) {
+    if (entry.id && materializedIdSet.has(entry.id)) {
+      dropped.push(dropWithReason(entry, 'suppressed_by_materialization_ledger'));
+      continue;
+    }
+
     if (skipMaterialized && entry.materialized) {
       dropped.push(dropWithReason(entry, 'skipped_materialized_recent'));
       continue;
@@ -117,6 +126,7 @@ export async function buildRecentRecallPacket({
   routeHint,
   projectHint,
   stableEntries = [],
+  materializedIds,
   logger,
 }) {
   const { query } = buildRecallQuery({
@@ -153,6 +163,7 @@ export async function buildRecentRecallPacket({
     projectHint,
     recentEntries,
     stableEntries,
+    materializedIds,
     skipMaterialized: config.recall.skipMaterialized,
     packOptions: {
       bucketPriority: config.packing.bucketPriority,

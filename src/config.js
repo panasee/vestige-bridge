@@ -31,8 +31,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   }),
   export: Object.freeze({
     rootDir: 'memory/vestige',
+    ledgerPath: '.materialization-ledger.json',
     tmpSuffix: '.tmp',
     enableExplicit: true,
+    keepSourceExports: false,
   }),
   packing: Object.freeze({
     bucketPriority: DEFAULT_BUCKET_PRIORITY,
@@ -199,12 +201,22 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
   };
 
   const rawExport = rawConfig?.export ?? {};
+  const rootDir = resolveRootDir(firstDefined(rawExport.rootDir, env('VESTIGE_BRIDGE_EXPORT_ROOT_DIR')), workspaceDir);
+  const ledgerPathRaw = parseString(
+    firstDefined(rawExport.ledgerPath, env('VESTIGE_BRIDGE_EXPORT_LEDGER_PATH')),
+    DEFAULT_CONFIG.export.ledgerPath,
+  );
   const exportConfig = {
-    rootDir: resolveRootDir(firstDefined(rawExport.rootDir, env('VESTIGE_BRIDGE_EXPORT_ROOT_DIR')), workspaceDir),
+    rootDir,
+    ledgerPath: path.isAbsolute(ledgerPathRaw) ? ledgerPathRaw : path.resolve(rootDir, ledgerPathRaw),
     tmpSuffix: parseString(firstDefined(rawExport.tmpSuffix, env('VESTIGE_BRIDGE_EXPORT_TMP_SUFFIX')), DEFAULT_CONFIG.export.tmpSuffix),
     enableExplicit: parseBoolean(
       firstDefined(rawExport.enableExplicit, env('VESTIGE_BRIDGE_EXPORT_ENABLE_EXPLICIT')),
       DEFAULT_CONFIG.export.enableExplicit,
+    ),
+    keepSourceExports: parseBoolean(
+      firstDefined(rawExport.keepSourceExports, env('VESTIGE_BRIDGE_EXPORT_KEEP_SOURCE_EXPORTS')),
+      DEFAULT_CONFIG.export.keepSourceExports,
     ),
   };
 

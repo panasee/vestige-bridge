@@ -181,6 +181,25 @@ function normalizeConsolidatePayload() {
   return {};
 }
 
+function normalizeExportPayload(payload) {
+  const input = isPlainObject(payload) ? payload : {};
+  const normalized = {
+    format: typeof input.format === 'string' && input.format.trim() ? input.format.trim() : 'json',
+  };
+
+  if (Array.isArray(input.tags) && input.tags.length > 0) {
+    normalized.tags = input.tags;
+  }
+  if (typeof input.since === 'string' && input.since.trim()) {
+    normalized.since = input.since.trim();
+  }
+  if (typeof input.path === 'string' && input.path.trim()) {
+    normalized.path = input.path.trim();
+  }
+
+  return normalized;
+}
+
 function normalizeUnsupportedPayload(payload) {
   return isPlainObject(payload) ? payload : {};
 }
@@ -526,6 +545,11 @@ export function createSidecarClient(options = {}) {
     return callFirstSupported('intention', ['intention'], payload, normalizeIntentionPayload);
   }
 
+  async function exportMemories(payload, requestOptions) {
+    void requestOptions;
+    return callFirstSupported('export', ['export'], payload, normalizeExportPayload);
+  }
+
   async function exportStable(payload, requestOptions) {
     void requestOptions;
     return callFirstSupported('exportStable', ['export_stable', 'exportStable'], payload, normalizeUnsupportedPayload);
@@ -573,6 +597,9 @@ export function createSidecarClient(options = {}) {
           return demoteMemory(payload);
         case 'intention':
           return intention(payload);
+        case 'export':
+        case 'exportMemories':
+          return exportMemories(payload);
         case 'exportStable':
           return exportStable(payload);
         case 'consolidate':
@@ -597,6 +624,7 @@ export function createSidecarClient(options = {}) {
     promoteMemory,
     demoteMemory,
     intention,
+    exportMemories,
     exportStable,
     consolidate,
     markMaterialized,
@@ -650,6 +678,10 @@ export class VestigeSidecarClient {
 
   intention(...args) {
     return this.client.intention(...args);
+  }
+
+  exportMemories(...args) {
+    return this.client.exportMemories(...args);
   }
 
   exportStable(...args) {

@@ -15,32 +15,27 @@
 - compact `<vestige_recent>...</vestige_recent>` injection via `prependContext`
 - fail-soft sidecar calls
 - best-effort `agent_end` smart-ingest
-- explicit stable export path
+- explicit export uses **`export` MCP tool + local adapter** (no Vestige code changes)
 - shard validation + markdown rendering + atomic writes
-- `mark_materialized` callback only for successfully written items
+- **local materialization ledger** to suppress already-exported Vestige ids
 
-## Out of scope for v1
+## Explicit export flow (current)
 
-- reverse reconcile/reimport from Cognee files back into Vestige
-- direct graph writes into Cognee
-- append-only shard dumps
-- automatic session-end export hook dependency
+1. Call Vestige MCP **`export`** tool to write a JSON/JSONL export file.
+2. Parse `KnowledgeNode` records and **classify** into stable items.
+3. Render shard snapshots under `memory/vestige/*` (overwrite semantics).
+4. Update local ledger to remember which Vestige ids were materialized.
 
-## Sidecar operations
+### Why the ledger?
 
-The runtime client exposes these methods:
+We do not modify the Vestige repo or write back `mark_materialized`, so the bridge keeps a local ledger to avoid re-injecting already-materialized nodes into recent recall packets.
 
-- `health()`
-- `search(payload)`
-- `smartIngest(payload)`
-- `promoteMemory(payload)`
-- `demoteMemory(payload)`
-- `exportStable(payload)`
-- `consolidate(payload)`
-- `markMaterialized(payload)`
+## Configuration
 
-The client accepts both `/vestige/...` and plain endpoint variants when available, and returns normalized envelopes instead of throwing by default.
+The `export` config supports:
 
-## Runtime helper
-
-`src/index.js` exports both the default plugin object and `createVestigeBridgeRuntime()` so the same config/logger/client plumbing can be reused from scripts or explicit export flows.
+- `rootDir`: output directory for shard snapshots
+- `ledgerPath`: local materialization ledger file (default: `.materialization-ledger.json` under `rootDir`)
+- `tmpSuffix`: temp suffix for atomic writes
+- `enableExplicit`: enable explicit export helper
+- `keepSourceExports`: keep raw Vestige export files when bridge generated the path
