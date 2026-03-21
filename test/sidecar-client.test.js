@@ -160,6 +160,154 @@ test('search maps recall-style payload into MCP search tool call and parses resu
   assert.equal(result.data.results[0].content, 'User prefers concise technical replies.');
 });
 
+test('memory maps action/id aliases into MCP memory tool calls', async () => {
+  const fetchImpl = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : null;
+
+    if (body?.method === 'initialize') {
+      return jsonResponse({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: { protocolVersion: '2024-11-05' },
+      }, {
+        headers: { 'mcp-session-id': '44444444-4444-4444-8444-444444444444' },
+      });
+    }
+
+    if (body?.method === 'notifications/initialized') {
+      return new Response(null, {
+        status: 202,
+        headers: { 'mcp-session-id': '44444444-4444-4444-8444-444444444444' },
+      });
+    }
+
+    if (body?.method === 'tools/call') {
+      assert.equal(body.params.name, 'memory');
+      assert.deepEqual(body.params.arguments, {
+        action: 'delete',
+        id: 'memory-123',
+        reason: 'rollback smoke test',
+      });
+
+      return jsonResponse({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ok: true,
+                action: 'delete',
+                id: 'memory-123',
+              }),
+            },
+          ],
+          isError: false,
+        },
+      });
+    }
+
+    throw new Error(`Unexpected method: ${body?.method}`);
+  };
+
+  const client = createSidecarClient({
+    baseUrl: 'http://127.0.0.1:3928',
+    authToken: 'test-token-abcdefghijklmnopqrstuvwxyz',
+    fetchImpl,
+  });
+
+  const result = await client.memory({
+    action: 'delete',
+    memoryId: 'memory-123',
+    reason: 'rollback smoke test',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.action, 'delete');
+  assert.equal(result.data.id, 'memory-123');
+});
+
+test('stats falls back to memory_health when generic stats tool is unavailable', async () => {
+  const seenToolNames = [];
+  const fetchImpl = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : null;
+
+    if (body?.method === 'initialize') {
+      return jsonResponse({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: { protocolVersion: '2024-11-05' },
+      }, {
+        headers: { 'mcp-session-id': '55555555-5555-4555-8555-555555555555' },
+      });
+    }
+
+    if (body?.method === 'notifications/initialized') {
+      return new Response(null, {
+        status: 202,
+        headers: { 'mcp-session-id': '55555555-5555-4555-8555-555555555555' },
+      });
+    }
+
+    if (body?.method === 'tools/call') {
+      seenToolNames.push(body.params.name);
+
+      if (body.params.name === 'stats') {
+        return jsonResponse({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ error: 'Unknown tool: stats' }),
+              },
+            ],
+            isError: true,
+          },
+        });
+      }
+
+      if (body.params.name === 'memory_health') {
+        assert.deepEqual(body.params.arguments, { verbose: true });
+        return jsonResponse({
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  status: 'ok',
+                  memories: 128,
+                  embeddings_ready: true,
+                }),
+              },
+            ],
+            isError: false,
+          },
+        });
+      }
+    }
+
+    throw new Error(`Unexpected method: ${body?.method}`);
+  };
+
+  const client = createSidecarClient({
+    baseUrl: 'http://127.0.0.1:3928',
+    authToken: 'test-token-abcdefghijklmnopqrstuvwxyz',
+    fetchImpl,
+  });
+
+  const result = await client.stats({ verbose: true });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(seenToolNames, ['stats', 'memory_health']);
+  assert.equal(result.data.status, 'ok');
+  assert.equal(result.data.memories, 128);
+});
+
 test('exportStable returns unsupported when vestige-mcp does not expose export_stable tools', async () => {
   const fetchImpl = async (url, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : null;

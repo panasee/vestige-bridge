@@ -167,6 +167,48 @@ function normalizeMemoryFeedbackPayload(payload, action) {
   };
 }
 
+function normalizeMemoryPayload(payload) {
+  if (typeof payload === 'string') {
+    return {
+      action: 'get',
+      id: compactWhitespace(payload),
+    };
+  }
+
+  const input = isPlainObject(payload) ? { ...payload } : {};
+  const normalized = {
+    action: compactWhitespace(input.action || input.op || 'get') || 'get',
+    id: compactWhitespace(input.id || input.memoryId || input.memory_id),
+  };
+
+  const optionalFields = {
+    content: input.content ?? input.text,
+    tags: input.tags,
+    source: input.source,
+    reason: input.reason,
+    metadata: input.metadata,
+    expectedVersion: input.expectedVersion ?? input.expected_version,
+  };
+
+  for (const [key, value] of Object.entries(optionalFields)) {
+    if (value !== undefined) {
+      normalized[key] = value;
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeStatsPayload(payload) {
+  if (typeof payload === 'string') {
+    return {
+      scope: compactWhitespace(payload),
+    };
+  }
+
+  return isPlainObject(payload) ? { ...payload } : {};
+}
+
 function normalizeIntentionPayload(payload) {
   if (isPlainObject(payload)) {
     return payload;
@@ -540,6 +582,16 @@ export function createSidecarClient(options = {}) {
     return callFirstSupported('demoteMemory', ['memory', 'demote_memory'], payload, (value) => normalizeMemoryFeedbackPayload(value, 'demote'));
   }
 
+  async function memory(payload, requestOptions) {
+    void requestOptions;
+    return callFirstSupported('memory', ['memory'], payload, normalizeMemoryPayload);
+  }
+
+  async function stats(payload, requestOptions) {
+    void requestOptions;
+    return callFirstSupported('stats', ['stats', 'memory_health', 'system_status'], payload, normalizeStatsPayload);
+  }
+
   async function intention(payload, requestOptions) {
     void requestOptions;
     return callFirstSupported('intention', ['intention'], payload, normalizeIntentionPayload);
@@ -591,6 +643,10 @@ export function createSidecarClient(options = {}) {
           return search(payload);
         case 'smartIngest':
           return smartIngest(payload);
+        case 'memory':
+          return memory(payload);
+        case 'stats':
+          return stats(payload);
         case 'promoteMemory':
           return promoteMemory(payload);
         case 'demoteMemory':
@@ -621,6 +677,8 @@ export function createSidecarClient(options = {}) {
     health,
     search,
     smartIngest,
+    memory,
+    stats,
     promoteMemory,
     demoteMemory,
     intention,
@@ -666,6 +724,14 @@ export class VestigeSidecarClient {
 
   smartIngest(...args) {
     return this.client.smartIngest(...args);
+  }
+
+  memory(...args) {
+    return this.client.memory(...args);
+  }
+
+  stats(...args) {
+    return this.client.stats(...args);
   }
 
   promoteMemory(...args) {
