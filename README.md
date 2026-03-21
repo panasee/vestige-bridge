@@ -11,8 +11,9 @@
 
 ## v1 behavior
 
-- every-turn recent recall in `before_prompt_build`
-- compact `<vestige_recent>...</vestige_recent>` injection via `prependContext`
+- **default mode: provider** — emit structured recent recall candidates for orchestrator
+- **compatibility mode: injector** — direct every-turn recent recall in `before_prompt_build`
+- injector mode renders compact `<vestige_recent>...</vestige_recent>` into `prependContext`
 - fail-soft sidecar calls
 - best-effort `agent_end` smart-ingest
 - explicit export uses **`export` MCP tool + local adapter** (no Vestige code changes)
@@ -45,6 +46,11 @@ The ledger is intentionally minimal and stores only:
 - `materialized_at`
 
 ## Configuration
+
+`recallMode` supports:
+
+- `provider` (**default**): register a structured recent-memory provider for orchestrator; do not inject prompt text directly
+- `injector`: keep standalone/debug behavior by registering `before_prompt_build` and returning `prependContext`
 
 The `export` config supports:
 

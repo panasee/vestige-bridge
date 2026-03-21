@@ -21,6 +21,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   authTokenPath: path.join(process.env.HOME || '', '.local', 'share', 'core', 'auth_token'),
   timeoutMs: 5000,
   debug: false,
+  recallMode: 'provider',
   recall: Object.freeze({
     maxResults: 4,
     maxTokens: 280,
@@ -123,6 +124,11 @@ function normalizeEnabledAgents(value) {
     .map((item) => item.trim());
 }
 
+function normalizeRecallMode(value) {
+  const normalized = parseString(value, DEFAULT_CONFIG.recallMode);
+  return normalized === 'provider' ? 'provider' : 'injector';
+}
+
 function normalizeBucketPriority(value) {
   if (!Array.isArray(value)) {
     return [...DEFAULT_BUCKET_PRIORITY];
@@ -165,6 +171,7 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
     { min: 100 },
   );
   const debug = parseBoolean(firstDefined(rawConfig.debug, env('VESTIGE_BRIDGE_DEBUG')), DEFAULT_CONFIG.debug);
+  const recallMode = normalizeRecallMode(firstDefined(rawConfig.recallMode, env('VESTIGE_BRIDGE_RECALL_MODE')));
 
   const rawRecall = rawConfig?.recall ?? {};
   const recallHardCap = parseInteger(
@@ -241,6 +248,7 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
     authTokenPath,
     timeoutMs,
     debug,
+    recallMode,
     recall,
     export: exportConfig,
     packing,

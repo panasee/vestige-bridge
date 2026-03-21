@@ -11,7 +11,9 @@ import {
 import { createLogger } from './logger.js';
 import { materializeExportEnvelope } from './materialization.js';
 import { buildAgentEndPayload, buildRecentRecallPacket } from './recall.js';
+import { createVestigeRecallProvider } from './provider.js';
 import { createSidecarClient } from './sidecar-client.js';
+import { registerSharedRecallProvider } from './shared-recall-registry.js';
 
 const PLUGIN_ID = 'vestige-bridge';
 const PLUGIN_NAME = 'Vestige Bridge';
@@ -196,8 +198,10 @@ export function createVestigeBridgeRuntime(options = {}) {
     fetchImpl: options.fetchImpl,
   });
 
+  const recallProvider = createVestigeRecallProvider({ client, config, logger });
+
   async function beforePromptBuild(event, ctx) {
-    if (!config.enabled) {
+    if (!config.enabled || config.recallMode !== 'injector') {
       return undefined;
     }
     if (!shouldApplyToAgent(config.enabledAgents, ctx?.agentId)) {
@@ -281,6 +285,9 @@ export function createVestigeBridgeRuntime(options = {}) {
     health() {
       return client.health();
     },
+    getRecallProvider() {
+      return recallProvider;
+    },
     beforePromptBuild,
     agentEnd,
     explicitExport(payload = {}) {
@@ -301,13 +308,18 @@ const plugin = {
       fetchImpl: api.fetch,
     });
 
-    api.on('before_prompt_build', async (event, ctx) => runtime.beforePromptBuild(event, ctx));
+    if (runtime.config.recallMode === 'provider') {
+      registerSharedRecallProvider(runtime.getRecallProvider());
+    } else {
+      api.on('before_prompt_build', async (event, ctx) => runtime.beforePromptBuild(event, ctx));
+    }
     api.on('agent_end', async (event, ctx) => runtime.agentEnd(event, ctx));
 
     api.vestigeBridge = {
       exportStableNow: async (payload = {}) => runtime.explicitExport(payload),
       health: () => runtime.health(),
       getConfig: () => runtime.config,
+      getRecallProvider: () => runtime.getRecallProvider(),
     };
   },
 };
