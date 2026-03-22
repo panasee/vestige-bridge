@@ -50,6 +50,16 @@
           "maxTailMessages": { "type": "integer", "minimum": 1 }
         }
       },
+      "ingest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxTailMessages": { "type": "integer", "minimum": 1 },
+          "provider": { "type": "string" },
+          "gateModel": { "type": "string" },
+          "extractModel": { "type": "string" }
+        }
+      },
       "export": {
         "type": "object",
         "additionalProperties": false,
