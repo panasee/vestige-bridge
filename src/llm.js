@@ -15,7 +15,14 @@ export async function invokeLlm({
 }) {
   try {
     // Dynamically import OpenClaw core SDK
-    const piAi = await import('@mariozechner/pi-ai');
+    let piAi;
+    try {
+        piAi = await import('@mariozechner/pi-ai');
+    } catch (e) {
+        // Fallback for when running outside the core module tree but within the context of OpenClaw
+        // Assumes openclaw is installed globally via npm in the default location
+        piAi = await import('/home/dongkai-claw/.npm-global/lib/node_modules/openclaw/node_modules/@mariozechner/pi-ai/dist/index.js');
+    }
     const getModel = piAi.getModel;
     const completeSimple = piAi.completeSimple;
 
