@@ -126,7 +126,7 @@ test('prepareRecentRecall skips materialized recent items and returns packet plu
   assert.match(result.query, /vestige-bridge/i);
 });
 
-test('buildAgentEndPayload returns full context when user content triggers ingest', () => {
+test('buildAgentEndPayload only sends extracted semantic statements, never tail context', () => {
   const payload = buildAgentEndPayload({
     messages: [
       { role: 'user', text: 'Conversation info: should not be stored.' },
@@ -135,10 +135,8 @@ test('buildAgentEndPayload returns full context when user content triggers inges
     ],
   });
 
-  // The second user message triggers the extraction ("must be dropped").
-  // The new logic should return the formatted context of the tail messages.
   assert.deepEqual(payload, {
-    content: '[USER]: Conversation info: should not be stored.\n\n[USER]: Empty recent-memory turns must be dropped instead of stored as placeholders.\n\n[ASSISTANT]: We should remove source and node_type from recent memory nodes.',
+    content: 'Empty recent-memory turns must be dropped instead of stored as placeholders.',
   });
 });
 

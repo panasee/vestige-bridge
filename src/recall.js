@@ -284,34 +284,15 @@ function extractRecentSemanticStatements(messages = []) {
 }
 
 export function buildAgentEndPayload({ messages = [], config = {} } = {}) {
-  // Use config or default to 6 messages
-  const maxTailMessages = config?.ingest?.maxTailMessages ?? 6;
-  
   // 1. Trigger Gate: Do we have any durable semantic statements in recent user messages?
   const statements = extractRecentSemanticStatements(messages);
   if (statements.length === 0) {
     return null; // No trigger found, do not ingest
   }
 
-  // 2. Payload Construction: If triggered, send the recent conversational context
-  // so the upstream smart_ingest LLM has full context to extract from.
-  const tailContext = [];
-  const startIndex = Math.max(0, messages.length - maxTailMessages);
-  
-  for (let i = startIndex; i < messages.length; i++) {
-    const msg = messages[i];
-    const role = messageRole(msg);
-    const text = compactWhitespace(asMessageText(msg));
-    if (text && (role === 'user' || role === 'assistant')) {
-      tailContext.push(`[${role.toUpperCase()}]: ${text}`);
-    }
-  }
-
-  if (tailContext.length === 0) {
-    return null;
-  }
-
+  // 2. Payload Construction: Since the upstream smart_ingest does NOT have an LLM
+  // for extraction, we must only send the exact matched semantic statements.
   return {
-    content: tailContext.join('\n\n'),
+    content: statements.join('\n'),
   };
 }
