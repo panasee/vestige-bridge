@@ -283,16 +283,4 @@ function extractRecentSemanticStatements(messages = []) {
   return [...new Set(candidates)].slice(-4);
 }
 
-export function buildAgentEndPayload({ messages = [], config = {} } = {}) {
-  // 1. Trigger Gate: Do we have any durable semantic statements in recent user messages?
-  const statements = extractRecentSemanticStatements(messages);
-  if (statements.length === 0) {
-    return null; // No trigger found, do not ingest
-  }
 
-  // 2. Payload Construction: Since the upstream smart_ingest does NOT have an LLM
-  // for extraction, we must only send the exact matched semantic statements.
-  return {
-    content: statements.join('\n'),
-  };
-}

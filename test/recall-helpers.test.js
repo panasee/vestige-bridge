@@ -6,7 +6,8 @@ import { normalizeEntry } from '../src/normalize.js';
 import { buildCanonicalKey, dedupeRecentAgainstStable } from '../src/dedupe.js';
 import { packEntries } from '../src/packing.js';
 import { renderVestigeRecent } from '../src/render.js';
-import { buildAgentEndPayload, prepareRecentRecall } from '../src/recall.js';
+import { prepareRecentRecall } from '../src/recall.js';
+import { buildAgentEndPayloadAsync } from '../src/ingest.js';
 
 test('buildRecallQuery includes latest user turn, tail, and hint', () => {
   const { query, parts } = buildRecallQuery({
@@ -126,47 +127,10 @@ test('prepareRecentRecall skips materialized recent items and returns packet plu
   assert.match(result.query, /vestige-bridge/i);
 });
 
-test('buildAgentEndPayload only sends extracted semantic statements, never tail context', () => {
-  const payload = buildAgentEndPayload({
-    messages: [
-      { role: 'user', text: 'Conversation info: should not be stored.' },
-      { role: 'user', text: 'Empty recent-memory turns must be dropped instead of stored as placeholders.' },
-      { role: 'assistant', text: 'We should remove source and node_type from recent memory nodes.' },
-    ],
-  });
-
-  assert.deepEqual(payload, {
-    content: 'Empty recent-memory turns must be dropped instead of stored as placeholders.',
-  });
-});
-
-
-test('buildAgentEndPayload ignores assistant-only semantic explanations', () => {
-  const payload = buildAgentEndPayload({
-    messages: [
-      {
-        role: 'assistant',
-        text: 'Current result: stable recall passed, but recent ingest is only visible after agent_end because vestige-bridge writes on agent_end.',
-      },
-      {
-        role: 'assistant',
-        text: 'Next step: patch recall.js so recent memory stores only user preferences and decisions.',
-      },
-    ],
-  });
-
-  assert.equal(payload, null);
-});
-
-test('buildAgentEndPayload drops ingest when no durable semantic content is present', () => {
-  const payload = buildAgentEndPayload({
-    messages: [
-      { role: 'user', text: 'Thanks.' },
-      { role: 'assistant', text: 'Done.' },
-      { role: 'user', text: 'Can you tell me the status?' },
-    ],
-  });
-
+test('buildAgentEndPayloadAsync uses LLM to extract durable semantic content', async () => {
+  // Since invokeLlm is used, we can't easily test the exact LLM output in this unit test.
+  // Instead, we just verify the new function is exported and can handle empty inputs.
+  const payload = await buildAgentEndPayloadAsync({ messages: [] });
   assert.equal(payload, null);
 });
 

@@ -10,7 +10,8 @@ import {
 } from './ledger.js';
 import { createLogger } from './logger.js';
 import { materializeExportEnvelope } from './materialization.js';
-import { buildAgentEndPayload, buildRecentRecallPacket } from './recall.js';
+import { buildRecentRecallPacket } from './recall.js';
+import { buildAgentEndPayloadAsync } from './ingest.js';
 import { createVestigeRecallProvider } from './provider.js';
 import { createSidecarClient } from './sidecar-client.js';
 import { registerSharedRecallProvider } from './shared-recall-registry.js';
@@ -226,11 +227,11 @@ export function createVestigeBridgeRuntime(options = {}) {
     }
 
     return failSoft({ config, logger, client }, 'agent_end', async () => {
-      const ingestPayload = buildAgentEndPayload({
+      const ingestPayload = await buildAgentEndPayloadAsync({
         messages: Array.isArray(event?.messages) ? event.messages : [],
         config,
         ctx,
-        event,
+        logger,
       });
 
       if (ingestPayload?.content) {
