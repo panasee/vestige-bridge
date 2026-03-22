@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 
 import { buildRecallQuery } from '../src/query-builder.js';
 import { normalizeEntry } from '../src/normalize.js';
-import { dedupeRecentAgainstStable } from '../src/dedupe.js';
+import { buildCanonicalKey, dedupeRecentAgainstStable } from '../src/dedupe.js';
 import { packEntries } from '../src/packing.js';
 import { renderVestigeRecent } from '../src/render.js';
-import { prepareRecentRecall } from '../src/recall.js';
+import { buildAgentEndPayload, prepareRecentRecall } from '../src/recall.js';
 
 test('buildRecallQuery includes latest user turn, tail, and hint', () => {
   const { query, parts } = buildRecallQuery({
@@ -124,4 +124,63 @@ test('prepareRecentRecall skips materialized recent items and returns packet plu
   assert.ok(result.dropped.some((entry) => entry.dropReasons.includes('suppressed_by_materialization_ledger')));
   assert.ok(result.dropped.some((entry) => entry.dropReasons.includes('skipped_materialized_recent')));
   assert.match(result.query, /vestige-bridge/i);
+});
+
+test('buildAgentEndPayload returns full context when user content triggers ingest', () => {
+  const payload = buildAgentEndPayload({
+    messages: [
+      { role: 'user', text: 'Conversation info: should not be stored.' },
+      { role: 'user', text: 'Empty recent-memory turns must be dropped instead of stored as placeholders.' },
+      { role: 'assistant', text: 'We should remove source and node_type from recent memory nodes.' },
+    ],
+  });
+
+  // The second user message triggers the extraction ("must be dropped").
+  // The new logic should return the formatted context of the tail messages.
+  assert.deepEqual(payload, {
+    content: '[USER]: Conversation info: should not be stored.\n\n[USER]: Empty recent-memory turns must be dropped instead of stored as placeholders.\n\n[ASSISTANT]: We should remove source and node_type from recent memory nodes.',
+  });
+});
+
+
+test('buildAgentEndPayload ignores assistant-only semantic explanations', () => {
+  const payload = buildAgentEndPayload({
+    messages: [
+      {
+        role: 'assistant',
+        text: 'Current result: stable recall passed, but recent ingest is only visible after agent_end because vestige-bridge writes on agent_end.',
+      },
+      {
+        role: 'assistant',
+        text: 'Next step: patch recall.js so recent memory stores only user preferences and decisions.',
+      },
+    ],
+  });
+
+  assert.equal(payload, null);
+});
+
+test('buildAgentEndPayload drops ingest when no durable semantic content is present', () => {
+  const payload = buildAgentEndPayload({
+    messages: [
+      { role: 'user', text: 'Thanks.' },
+      { role: 'assistant', text: 'Done.' },
+      { role: 'user', text: 'Can you tell me the status?' },
+    ],
+  });
+
+  assert.equal(payload, null);
+});
+
+test('buildCanonicalKey falls back to layer instead of source', () => {
+  const recent = normalizeEntry({
+    content: 'User prefers clean recent memory contracts.',
+    source: 'openclaw:agent_end',
+  }, {
+    defaultLayer: 'recent',
+  });
+
+  const key = buildCanonicalKey(recent);
+  assert.match(key, /^recent::/);
+  assert.doesNotMatch(key, /openclaw/i);
 });

@@ -55,7 +55,7 @@ export function buildCanonicalKey(entry) {
     return `${entry.shardKey}::${hash}`;
   }
 
-  const bucket = entry?.dataset || entry?.source || entry?.layer || 'memory';
+  const bucket = entry?.dataset || entry?.layer || 'memory';
   return `${bucket}::${hash}`;
 }
 

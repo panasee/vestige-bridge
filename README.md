@@ -12,8 +12,8 @@
 ## v1 behavior
 
 - **default mode: provider** — emit structured recent recall candidates for orchestrator
-- **compatibility mode: injector** — direct every-turn recent recall in `before_prompt_build`
-- injector mode renders compact `<vestige_recent>...</vestige_recent>` into `prependContext`
+- **compatibility mode: injector** — standalone/debug-only fallback for direct every-turn recent recall in `before_prompt_build`
+- injector mode may render compact `<vestige_recent>...</vestige_recent>` into `prependContext`, but production OpenClaw architecture should keep `orchestrator` as the sole final injector
 - fail-soft sidecar calls
 - best-effort `agent_end` smart-ingest
 - explicit export uses **`export` MCP tool + local adapter** (no Vestige code changes)
@@ -50,7 +50,7 @@ The ledger is intentionally minimal and stores only:
 `recallMode` supports:
 
 - `provider` (**default**): register a structured recent-memory provider for orchestrator; do not inject prompt text directly
-- `injector`: keep standalone/debug behavior by registering `before_prompt_build` and returning `prependContext`
+- `injector`: keep standalone/debug behavior by registering `before_prompt_build` and returning `prependContext`; do not treat this as the default production architecture
 
 The `export` config supports:
 
@@ -59,3 +59,4 @@ The `export` config supports:
 - `tmpSuffix`: temp suffix for atomic writes
 - `enableExplicit`: enable explicit export helper
 - `keepSourceExports`: keep raw Vestige export files when bridge generated the path
+eExports`: keep raw Vestige export files when bridge generated the path

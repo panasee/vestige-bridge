@@ -88,8 +88,15 @@ function extractProjectSlugFromSource(source) {
   return null;
 }
 
-function inferProjectSlug(node) {
-  return extractProjectSlugFromTags(node.tags) || extractProjectSlugFromSource(node.source);
+function inferProjectSlug(node, options = {}) {
+  const explicitProjectSlug = normalizeProjectSlug(
+    options.projectSlug
+    || options.project_slug
+    || node?.raw?.projectSlug
+    || node?.raw?.project_slug,
+  );
+
+  return explicitProjectSlug || extractProjectSlugFromTags(node.tags) || extractProjectSlugFromSource(node.source);
 }
 
 function normalizeKnowledgeNode(raw = {}) {
@@ -119,24 +126,45 @@ function looksLikeProfileStatement(content) {
 }
 
 function looksLikeConstraintStatement(content) {
-  return /^(?:always|never|do not|don't|before|after|must|should|need to|remember to|if )/i.test(content);
+  return /\b(?:always|never|do not|don't|before|after|must|should|need to|remember to|if)\b/i.test(content)
+    || /总是|从不|不要|不能|必须|应该|需要|规则|约束/i.test(content);
 }
 
 function looksLikePreferenceStatement(content) {
-  return /\b(?:prefer|preference|likes?|wants?|doesn't want|avoid|priority|prioritize)\b/i.test(content)
+  return /\b(?:prefer|prefers|preferred|preference|likes?|wants?|doesn't want|avoid|priority|prioritize)\b/i.test(content)
     || /更喜欢|偏好|优先/i.test(content);
 }
 
-function determineLifecycleReason(node, label) {
+function looksLikeDecisionStatement(content) {
+  return /\b(?:decision|decided|agreed|accepted|rejected|approved|finalized|resolved)\b/i.test(content)
+    || /决定|已决定|同意|拒绝|通过|最终确定/i.test(content);
+}
+
+function determineLifecycleReason(node, label, signals = {}) {
   const retention = node.retentionStrength ?? 0;
   if (retention >= 0.75) {
     return `${label}_high_retention`;
   }
-  return `${label}_tagged`; 
+  if (signals.tagged) {
+    return `${label}_tagged`;
+  }
+  if (signals.semantic) {
+    return `${label}_semantic`;
+  }
+  return `${label}_eligible`;
 }
 
 function buildBaseItem(node, classification) {
   const tags = uniqueStrings(node.tags);
+  const sourceRefs = node.source
+    ? [
+        {
+          vestige_id: node.id,
+          source: node.source,
+        },
+      ]
+    : undefined;
+
   return {
     vestige_id: node.id,
     shard_key: classification.shard_key,
@@ -152,12 +180,7 @@ function buildBaseItem(node, classification) {
     why_durable: classification.why_durable,
     project_slug: classification.project_slug ?? undefined,
     decision_status: classification.decision_status ?? undefined,
-    source_refs: [
-      {
-        vestige_id: node.id,
-        source: node.source || null,
-      },
-    ],
+    source_refs: sourceRefs,
   };
 }
 
@@ -167,8 +190,13 @@ function classifyProjectNode(node, projectSlug) {
   }
 
   const tags = node.tags;
+  const content = node.content;
   const retention = node.retentionStrength ?? 0;
-  const signalStrength = retention >= MIN_RETENTION || hasAnyTag(tags, ['decision', 'constraint', 'preference', 'project']);
+  const taggedProjectSignal = hasAnyTag(tags, ['decision', 'constraint', 'preference', 'project']);
+  const semanticProjectSignal = looksLikeDecisionStatement(content)
+    || looksLikeConstraintStatement(content)
+    || looksLikePreferenceStatement(content);
+  const signalStrength = retention >= MIN_RETENTION || taggedProjectSignal || semanticProjectSignal;
   if (!signalStrength) {
     return null;
   }
@@ -177,28 +205,47 @@ function classifyProjectNode(node, projectSlug) {
   let label = 'project_fact';
   let why = 'Project-scoped memory with explicit project slug and stable retention.';
   let confidence = retention >= 0.75 ? 0.9 : 0.82;
+  let signals = { tagged: taggedProjectSignal, semantic: semanticProjectSignal };
 
-  if (hasAnyTag(tags, ['decision', 'decision-made', 'decided'])) {
+  if (hasAnyTag(tags, ['decision', 'decision-made', 'decided']) || looksLikeDecisionStatement(content)) {
     category = 'project_decision';
     label = 'project_decision';
-    why = 'Project-scoped decision tagged explicitly for durable export.';
-    confidence = 0.93;
-  } else if (hasAnyTag(tags, ['constraint', 'rule', 'policy', 'guardrail'])) {
+    why = hasAnyTag(tags, ['decision', 'decision-made', 'decided'])
+      ? 'Project-scoped decision tagged explicitly for durable export.'
+      : 'Project-scoped decision inferred from semantic content.';
+    confidence = hasAnyTag(tags, ['decision', 'decision-made', 'decided']) ? 0.93 : 0.84;
+    signals = {
+      tagged: hasAnyTag(tags, ['decision', 'decision-made', 'decided']),
+      semantic: looksLikeDecisionStatement(content),
+    };
+  } else if (hasAnyTag(tags, ['constraint', 'rule', 'policy', 'guardrail']) || looksLikeConstraintStatement(content)) {
     category = 'project_constraint';
     label = 'project_constraint';
-    why = 'Project-scoped constraint/rule tagged explicitly for durable export.';
-    confidence = 0.91;
-  } else if (hasAnyTag(tags, ['preference', 'workflow'])) {
+    why = hasAnyTag(tags, ['constraint', 'rule', 'policy', 'guardrail'])
+      ? 'Project-scoped constraint/rule tagged explicitly for durable export.'
+      : 'Project-scoped constraint inferred from semantic content.';
+    confidence = hasAnyTag(tags, ['constraint', 'rule', 'policy', 'guardrail']) ? 0.91 : 0.82;
+    signals = {
+      tagged: hasAnyTag(tags, ['constraint', 'rule', 'policy', 'guardrail']),
+      semantic: looksLikeConstraintStatement(content),
+    };
+  } else if (hasAnyTag(tags, ['preference', 'workflow']) || looksLikePreferenceStatement(content)) {
     category = 'project_preference';
     label = 'project_preference';
-    why = 'Project-scoped preference/workflow memory tagged explicitly for durable export.';
-    confidence = 0.88;
+    why = hasAnyTag(tags, ['preference', 'workflow'])
+      ? 'Project-scoped preference/workflow memory tagged explicitly for durable export.'
+      : 'Project-scoped preference inferred from semantic content.';
+    confidence = hasAnyTag(tags, ['preference', 'workflow']) ? 0.88 : 0.8;
+    signals = {
+      tagged: hasAnyTag(tags, ['preference', 'workflow']),
+      semantic: looksLikePreferenceStatement(content),
+    };
   }
 
   return {
     shard_key: `projects/${projectSlug}`,
     category,
-    transfer_reason: determineLifecycleReason(node, label),
+    transfer_reason: determineLifecycleReason(node, label, signals),
     confidence,
     why_durable: why,
     project_slug: projectSlug,
@@ -210,32 +257,38 @@ function classifyGlobalNode(node) {
   const retention = node.retentionStrength ?? 0;
   const content = node.content;
 
-  if ((hasAnyTag(tags, ['profile', 'identity', 'persona']) || looksLikeProfileStatement(content)) && retention >= MIN_STRONG_SIGNAL_RETENTION) {
+  const profileTagged = hasAnyTag(tags, ['profile', 'identity', 'persona']);
+  const profileSemantic = looksLikeProfileStatement(content);
+  if ((profileTagged || profileSemantic) && retention >= MIN_STRONG_SIGNAL_RETENTION) {
     return {
       shard_key: 'global/profile',
       category: 'profile',
-      transfer_reason: determineLifecycleReason(node, 'profile'),
-      confidence: hasAnyTag(tags, ['profile', 'identity', 'persona']) ? 0.9 : 0.78,
+      transfer_reason: determineLifecycleReason(node, 'profile', { tagged: profileTagged, semantic: profileSemantic }),
+      confidence: profileTagged ? 0.9 : 0.78,
       why_durable: 'Profile/identity statement suitable for long-term durable memory.',
     };
   }
 
-  if ((hasAnyTag(tags, ['constraint', 'rule', 'policy', 'guardrail', 'verification']) || looksLikeConstraintStatement(content)) && retention >= MIN_STRONG_SIGNAL_RETENTION) {
+  const constraintTagged = hasAnyTag(tags, ['constraint', 'rule', 'policy', 'guardrail', 'verification']);
+  const constraintSemantic = looksLikeConstraintStatement(content);
+  if ((constraintTagged || constraintSemantic) && retention >= MIN_STRONG_SIGNAL_RETENTION) {
     return {
       shard_key: 'global/constraints',
       category: 'constraint',
-      transfer_reason: determineLifecycleReason(node, 'constraint'),
-      confidence: hasAnyTag(tags, ['constraint', 'rule', 'policy', 'guardrail', 'verification']) ? 0.91 : 0.79,
+      transfer_reason: determineLifecycleReason(node, 'constraint', { tagged: constraintTagged, semantic: constraintSemantic }),
+      confidence: constraintTagged ? 0.91 : 0.79,
       why_durable: 'Constraint/rule statement belongs in global durable constraints.',
     };
   }
 
-  if ((hasAnyTag(tags, ['preference', 'workflow', 'tools']) || looksLikePreferenceStatement(content)) && retention >= MIN_STRONG_SIGNAL_RETENTION) {
+  const preferenceTagged = hasAnyTag(tags, ['preference', 'workflow', 'tools']);
+  const preferenceSemantic = looksLikePreferenceStatement(content);
+  if ((preferenceTagged || preferenceSemantic) && retention >= MIN_STRONG_SIGNAL_RETENTION) {
     return {
       shard_key: 'global/preferences',
       category: 'preference',
-      transfer_reason: determineLifecycleReason(node, 'preference'),
-      confidence: hasAnyTag(tags, ['preference', 'workflow', 'tools']) ? 0.9 : 0.77,
+      transfer_reason: determineLifecycleReason(node, 'preference', { tagged: preferenceTagged, semantic: preferenceSemantic }),
+      confidence: preferenceTagged ? 0.9 : 0.77,
       why_durable: 'Preference/workflow statement belongs in global durable preferences.',
     };
   }
@@ -254,7 +307,7 @@ function classifyPersonalNode(node) {
     return {
       shard_key: 'personal/people',
       category: 'person',
-      transfer_reason: determineLifecycleReason(node, 'person'),
+      transfer_reason: determineLifecycleReason(node, 'person', { tagged: true }),
       confidence: 0.88,
       why_durable: 'Personal relationship/person memory tagged explicitly for durable storage.',
     };
@@ -264,7 +317,7 @@ function classifyPersonalNode(node) {
     return {
       shard_key: 'personal/routines',
       category: 'routine',
-      transfer_reason: determineLifecycleReason(node, 'routine'),
+      transfer_reason: determineLifecycleReason(node, 'routine', { tagged: true }),
       confidence: 0.88,
       why_durable: 'Routine/habit memory tagged explicitly for durable storage.',
     };
@@ -275,7 +328,7 @@ function classifyPersonalNode(node) {
     return {
       shard_key: 'personal/notable-events',
       category: 'life_event',
-      transfer_reason: determineLifecycleReason(node, 'event'),
+      transfer_reason: determineLifecycleReason(node, 'event', { tagged: true }),
       confidence: 0.86,
       why_durable: 'Tagged personal event/milestone suitable for durable storage.',
       event_date: eventDate,
@@ -291,7 +344,7 @@ export function classifyKnowledgeNode(rawNode, options = {}) {
     return null;
   }
 
-  const projectSlug = inferProjectSlug(node);
+  const projectSlug = inferProjectSlug(node, options);
   const projectClassification = classifyProjectNode(node, projectSlug);
   const fallbackClassification = projectClassification || classifyGlobalNode(node) || classifyPersonalNode(node);
   if (!fallbackClassification) {
@@ -324,14 +377,14 @@ export async function readExportedKnowledgeNodes(exportPath) {
     .map((line) => JSON.parse(line));
 }
 
-export function adaptExportedNodes({ nodes = [], exportPath = null, generationId, generatedAt } = {}) {
+export function adaptExportedNodes({ nodes = [], exportPath = null, generationId, generatedAt, projectSlug = null } = {}) {
   const seenIds = new Set();
   const seenStatements = new Set();
   const items = [];
   const skipped = [];
 
   for (const rawNode of nodes) {
-    const classified = classifyKnowledgeNode(rawNode, { exportPath });
+    const classified = classifyKnowledgeNode(rawNode, { exportPath, projectSlug });
     const nodeId = compactWhitespace(rawNode?.id);
     if (!classified) {
       skipped.push({ id: nodeId || null, reason: 'not_durable_enough' });

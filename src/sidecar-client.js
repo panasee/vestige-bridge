@@ -149,13 +149,22 @@ function normalizeSmartIngestPayload(payload) {
     };
   }
 
-  return {
+  const normalized = {
     content: input.content || input.text || '',
-    node_type: input.node_type || input.nodeType || 'note',
-    tags: Array.isArray(input.tags) ? input.tags : undefined,
-    source: input.source,
     forceCreate: input.forceCreate ?? input.force_create,
   };
+
+  if (input.node_type !== undefined || input.nodeType !== undefined) {
+    normalized.node_type = input.node_type || input.nodeType;
+  }
+  if (Array.isArray(input.tags)) {
+    normalized.tags = input.tags;
+  }
+  if (input.source !== undefined) {
+    normalized.source = input.source;
+  }
+
+  return normalized;
 }
 
 function normalizeMemoryFeedbackPayload(payload, action) {

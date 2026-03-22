@@ -184,42 +184,134 @@ export async function buildRecentRecallPacket({
   };
 }
 
-export function buildAgentEndPayload({ messages = [], ctx, event } = {}) {
-  const { queryParts } = prepareRecentRecall({ messages, queryOptions: { maxChars: 500 } });
-  const latestUserTurn = queryParts?.latest || '';
-  const tail = queryParts?.tail || '';
-  const latestAssistantTurn = Array.isArray(messages)
-    ? [...messages].reverse().find((message) => String(message?.role || message?.type || '').toLowerCase() === 'assistant')
-    : null;
-  const assistantText = typeof latestAssistantTurn?.content === 'string'
-    ? latestAssistantTurn.content
-    : Array.isArray(latestAssistantTurn?.content)
-      ? latestAssistantTurn.content.map((part) => part?.text || '').join(' ').trim()
-      : latestAssistantTurn?.text || '';
+function compactWhitespace(text) {
+  return String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  const sections = [
-    'OpenClaw turn checkpoint',
-    ctx?.sessionKey ? `session_key: ${ctx.sessionKey}` : '',
-    ctx?.agentId ? `agent_id: ${ctx.agentId}` : '',
-    ctx?.trigger ? `trigger: ${ctx.trigger}` : '',
-    latestUserTurn ? `latest_user_turn: ${latestUserTurn}` : '',
-    assistantText ? `latest_assistant_turn: ${String(assistantText).trim()}` : '',
-    tail ? `recent_tail: ${tail}` : '',
-    event?.success === false ? 'turn_outcome: failed' : 'turn_outcome: success',
-  ].filter(Boolean);
+function messageRole(message) {
+  return String(message?.role || message?.author || message?.type || 'message').toLowerCase();
+}
 
-  const tags = [
-    'source:openclaw',
-    'lane:recent',
-    ctx?.agentId ? `agent:${ctx.agentId}` : null,
-    ctx?.trigger ? `trigger:${ctx.trigger}` : null,
-    ctx?.channelId ? `channel:${ctx.channelId}` : null,
-  ].filter(Boolean);
+function asMessageText(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => asMessageText(item)).filter(Boolean).join(' ');
+  }
+
+  if (value && typeof value === 'object') {
+    return [
+      value.text,
+      value.content,
+      value.summary,
+      value.body,
+      value.message,
+      value.value,
+    ]
+      .map((item) => asMessageText(item))
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  return '';
+}
+
+function splitIntoStatements(text) {
+  return String(text || '')
+    .split(/(?<=[.!?。！？;；])\s+|\n+/)
+    .map((segment) => compactWhitespace(segment))
+    .filter(Boolean);
+}
+
+function sanitizeStatement(text) {
+  return compactWhitespace(text)
+    .replace(/^(?:user|assistant|system|developer|tool):\s*/i, '')
+    .replace(/^(?:latest_user_turn|latest_assistant_turn):\s*/i, '')
+    .trim();
+}
+
+function isForbiddenStatement(text) {
+  return /^(?:conversation info|sender|openclaw turn checkpoint|source:|lane:|<\/??vestige_recent>)/i.test(text)
+    || /session[_ -]?key|session[_ -]?id|agent[_ -]?id|messageProvider|workspaceDir/i.test(text);
+}
+
+function isDurableSemanticStatement(text) {
+  if (!text || text.length < 12) {
+    return false;
+  }
+
+  if (/[?？]\s*$/.test(text)) {
+    return false;
+  }
+
+  return /\b(prefer|preference|preferably|likes?|wants?|doesn't want|avoid|priority|prioritize|always|never|must|should|need to|do not|don't|keep|remove|drop|skip|forbid|allow|rule|constraint|decision|decided|agreed|reject|rejected|accept|accepted|important)\b/i.test(text)
+    || /更喜欢|偏好|优先|总是|从不|必须|应该|需要|不要|不能|规则|约束|决定|已决定|同意|拒绝|删除|移除|去掉|保留|跳过|重要/i.test(text);
+}
+
+function extractRecentSemanticStatements(messages = []) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return [];
+  }
+
+  const candidates = [];
+  for (let index = Math.max(0, messages.length - 6); index < messages.length; index += 1) {
+    const message = messages[index];
+    const role = messageRole(message);
+    if (role !== 'user') {
+      continue;
+    }
+
+    const text = compactWhitespace(asMessageText(message));
+    if (!text) {
+      continue;
+    }
+
+    for (const statement of splitIntoStatements(text)) {
+      const cleaned = sanitizeStatement(statement);
+      if (!cleaned || isForbiddenStatement(cleaned) || !isDurableSemanticStatement(cleaned)) {
+        continue;
+      }
+      candidates.push(cleaned);
+    }
+  }
+
+  return [...new Set(candidates)].slice(-4);
+}
+
+export function buildAgentEndPayload({ messages = [], config = {} } = {}) {
+  // Use config or default to 6 messages
+  const maxTailMessages = config?.ingest?.maxTailMessages ?? 6;
+  
+  // 1. Trigger Gate: Do we have any durable semantic statements in recent user messages?
+  const statements = extractRecentSemanticStatements(messages);
+  if (statements.length === 0) {
+    return null; // No trigger found, do not ingest
+  }
+
+  // 2. Payload Construction: If triggered, send the recent conversational context
+  // so the upstream smart_ingest LLM has full context to extract from.
+  const tailContext = [];
+  const startIndex = Math.max(0, messages.length - maxTailMessages);
+  
+  for (let i = startIndex; i < messages.length; i++) {
+    const msg = messages[i];
+    const role = messageRole(msg);
+    const text = compactWhitespace(asMessageText(msg));
+    if (text && (role === 'user' || role === 'assistant')) {
+      tailContext.push(`[${role.toUpperCase()}]: ${text}`);
+    }
+  }
+
+  if (tailContext.length === 0) {
+    return null;
+  }
 
   return {
-    content: sections.join('\n'),
-    node_type: 'note',
-    tags,
-    source: ctx?.sessionKey ? `openclaw:${ctx.sessionKey}` : 'openclaw:agent_end',
+    content: tailContext.join('\n\n'),
   };
 }

@@ -228,6 +228,65 @@ test('memory maps action/id aliases into MCP memory tool calls', async () => {
   assert.equal(result.data.id, 'memory-123');
 });
 
+test('smartIngest does not inject node_type/tags/source defaults when only content is provided', async () => {
+  const fetchImpl = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : null;
+
+    if (body?.method === 'initialize') {
+      return jsonResponse({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: { protocolVersion: '2024-11-05' },
+      }, {
+        headers: { 'mcp-session-id': '66666666-6666-4666-8666-666666666666' },
+      });
+    }
+
+    if (body?.method === 'notifications/initialized') {
+      return new Response(null, {
+        status: 202,
+        headers: { 'mcp-session-id': '66666666-6666-4666-8666-666666666666' },
+      });
+    }
+
+    if (body?.method === 'tools/call') {
+      assert.equal(body.params.name, 'smart_ingest');
+      assert.deepEqual(body.params.arguments, {
+        content: 'User prefers content-only recent memory nodes.',
+      });
+
+      return jsonResponse({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ ok: true, id: 'memory-456' }),
+            },
+          ],
+          isError: false,
+        },
+      });
+    }
+
+    throw new Error(`Unexpected method: ${body?.method}`);
+  };
+
+  const client = createSidecarClient({
+    baseUrl: 'http://127.0.0.1:3928',
+    authToken: 'test-token-abcdefghijklmnopqrstuvwxyz',
+    fetchImpl,
+  });
+
+  const result = await client.smartIngest({
+    content: 'User prefers content-only recent memory nodes.',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.id, 'memory-456');
+});
+
 test('stats falls back to memory_health when generic stats tool is unavailable', async () => {
   const seenToolNames = [];
   const fetchImpl = async (url, options = {}) => {

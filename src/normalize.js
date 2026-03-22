@@ -131,13 +131,16 @@ function normalizeLayer(entry, fallbackLayer) {
   if (entry?.materialized || entry?.materialized_generation || entry?.shard_key || entry?.shardKey) {
     return 'stable';
   }
+  if (fallbackLayer) {
+    return String(fallbackLayer).toLowerCase();
+  }
   if (entry?.source === 'cognee') {
     return 'stable';
   }
   if (entry?.source === 'vestige') {
     return 'recent';
   }
-  return fallbackLayer || 'recent';
+  return 'recent';
 }
 
 function normalizeTimestamp(entry) {

@@ -19,22 +19,6 @@ const PLUGIN_ID = 'vestige-bridge';
 const PLUGIN_NAME = 'Vestige Bridge';
 const PLUGIN_DESCRIPTION = 'Vestige recent-memory bridge with explicit stable export materialization.';
 
-function buildSessionMetadata(ctx) {
-  const metadata = {
-    agentId: ctx?.agentId,
-    sessionId: ctx?.sessionId,
-    sessionKey: ctx?.sessionKey,
-    workspaceDir: ctx?.workspaceDir,
-    trigger: ctx?.trigger,
-    channelId: ctx?.channelId,
-    messageProvider: ctx?.messageProvider,
-  };
-
-  return Object.fromEntries(
-    Object.entries(metadata).filter(([, value]) => typeof value === 'string' && value.trim().length > 0),
-  );
-}
-
 function toOperationPayload(value, fallbackPayload) {
   if (value === undefined || value === null || value === false) {
     return null;
@@ -244,15 +228,13 @@ export function createVestigeBridgeRuntime(options = {}) {
     return failSoft({ config, logger, client }, 'agent_end', async () => {
       const ingestPayload = buildAgentEndPayload({
         messages: Array.isArray(event?.messages) ? event.messages : [],
+        config,
         ctx,
         event,
       });
 
-      if (ingestPayload.content) {
-        await runBestEffortOperation('smartIngest', {
-          ...ingestPayload,
-          metadata: buildSessionMetadata(ctx),
-        }, { config, logger, client }, 'agent_end');
+      if (ingestPayload?.content) {
+        await runBestEffortOperation('smartIngest', ingestPayload, { config, logger, client }, 'agent_end');
       }
 
       const promotePayload = toOperationPayload(
@@ -263,7 +245,7 @@ export function createVestigeBridgeRuntime(options = {}) {
       );
       const consolidatePayload = toOperationPayload(
         readVestigeInstruction(event, 'consolidate'),
-        { metadata: buildSessionMetadata(ctx) },
+        {},
       );
       const markMaterializedPayload = toOperationPayload(
         readVestigeInstruction(event, 'markMaterialized', 'mark_materialized', 'mark-materialized'),

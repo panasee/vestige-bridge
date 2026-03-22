@@ -207,6 +207,15 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
     ),
   };
 
+  const rawIngest = rawConfig?.ingest ?? {};
+  const ingest = {
+    maxTailMessages: parseInteger(
+      firstDefined(rawIngest.maxTailMessages, env('VESTIGE_BRIDGE_INGEST_MAX_TAIL_MESSAGES')),
+      6,
+      { min: 1 },
+    ),
+  };
+
   const rawExport = rawConfig?.export ?? {};
   const rootDir = resolveRootDir(firstDefined(rawExport.rootDir, env('VESTIGE_BRIDGE_EXPORT_ROOT_DIR')), workspaceDir);
   const ledgerPathRaw = parseString(
@@ -250,6 +259,7 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
     debug,
     recallMode,
     recall,
+    ingest,
     export: exportConfig,
     packing,
     behavior,

@@ -48,6 +48,37 @@ test('classifyKnowledgeNode maps project-tagged node into project shard', () => 
   assert.match(item.transfer_reason, /project_constraint/i);
 });
 
+test('classifyKnowledgeNode maps content-only preference without tags or source', () => {
+  const item = classifyKnowledgeNode({
+    id: 'pref-untagged-1',
+    content: 'User prefers content-only recent memory nodes.',
+    retentionStrength: 0.52,
+    createdAt: '2026-03-20T00:00:00Z',
+  });
+
+  assert.equal(item.shard_key, 'global/preferences');
+  assert.equal(item.category, 'preference');
+  assert.equal(item.source_refs, undefined);
+  assert.match(item.transfer_reason, /preference_(semantic|high_retention)/i);
+});
+
+test('classifyKnowledgeNode accepts explicit project slug outside the memory node', () => {
+  const item = classifyKnowledgeNode({
+    id: 'proj-explicit-1',
+    content: 'Recent memory export must drop placeholder checkpoints.',
+    retentionStrength: 0.56,
+    createdAt: '2026-03-20T00:00:00Z',
+  }, {
+    projectSlug: 'vestige-bridge',
+  });
+
+  assert.equal(item.shard_key, 'projects/vestige-bridge');
+  assert.equal(item.project_slug, 'vestige-bridge');
+  assert.equal(item.category, 'project_constraint');
+  assert.equal(item.source_refs, undefined);
+  assert.match(item.transfer_reason, /project_constraint_(semantic|high_retention)/i);
+});
+
 test('adaptExportedNodes filters non-durable items and returns envelope', () => {
   const result = adaptExportedNodes({
     nodes: [
