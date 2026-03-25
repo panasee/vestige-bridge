@@ -3,6 +3,7 @@ import { normalizeEntries } from './normalize.js';
 import { collapseDuplicates, dedupeRecentAgainstStable } from './dedupe.js';
 import { packEntries } from './packing.js';
 import { renderVestigeRecent } from './render.js';
+import { lookupCategories } from './category-store.js';
 
 function dropWithReason(entry, reason, extra = {}) {
   return {
@@ -154,7 +155,16 @@ export async function buildRecentRecallPacket({
     return { query, packet: '', selected: [], dropped: [], stats: { inputRecent: 0, inputStable: stableEntries.length }, response };
   }
 
-  const recentEntries = extractSearchItems(response.data);
+  const rawEntries = extractSearchItems(response.data);
+
+  // Attach stored category to each entry so deriveBucket can route it correctly.
+  const entryIds = rawEntries.map((e) => e?.id).filter(Boolean);
+  const categoryMap = await lookupCategories(entryIds).catch(() => new Map());
+  const recentEntries = rawEntries.map((entry) => {
+    if (!entry?.id || !categoryMap.has(entry.id)) return entry;
+    return { ...entry, category: categoryMap.get(entry.id) };
+  });
+
   const result = prepareRecentRecall({
     messages,
     latestUserTurn,
@@ -182,105 +192,6 @@ export async function buildRecentRecallPacket({
     ...result,
     response,
   };
-}
-
-function compactWhitespace(text) {
-  return String(text || '')
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function messageRole(message) {
-  return String(message?.role || message?.author || message?.type || 'message').toLowerCase();
-}
-
-function asMessageText(value) {
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => asMessageText(item)).filter(Boolean).join(' ');
-  }
-
-  if (value && typeof value === 'object') {
-    return [
-      value.text,
-      value.content,
-      value.summary,
-      value.body,
-      value.message,
-      value.value,
-    ]
-      .map((item) => asMessageText(item))
-      .filter(Boolean)
-      .join(' ');
-  }
-
-  return '';
-}
-
-function splitIntoStatements(text) {
-  return String(text || '')
-    .split(/(?<=[.!?。！？;；])\s+|\n+/)
-    .map((segment) => compactWhitespace(segment))
-    .filter(Boolean);
-}
-
-function sanitizeStatement(text) {
-  return compactWhitespace(text)
-    .replace(/^(?:user|assistant|system|developer|tool):\s*/i, '')
-    .replace(/^(?:latest_user_turn|latest_assistant_turn):\s*/i, '')
-    .trim();
-}
-
-function isForbiddenStatement(text) {
-  return /^(?:conversation info|sender|openclaw turn checkpoint|source:|lane:|<\/??vestige_recent>)/i.test(text)
-    || /session[_ -]?key|session[_ -]?id|agent[_ -]?id|messageProvider|workspaceDir/i.test(text);
-}
-
-function isDurableSemanticStatement(text) {
-  if (!text || text.length < 12) {
-    return false;
-  }
-
-  if (/[?？]\s*$/.test(text)) {
-    return false;
-  }
-
-  return /\b(prefer|preference|preferably|likes?|wants?|doesn't want|avoid|priority|prioritize|always|never|must|should|need to|do not|don't|keep|remove|drop|skip|forbid|allow|rule|constraint|decision|decided|agreed|reject|rejected|accept|accepted|important)\b/i.test(text)
-    || /更喜欢|偏好|优先|总是|从不|必须|应该|需要|不要|不能|规则|约束|决定|已决定|同意|拒绝|删除|移除|去掉|保留|跳过|重要/i.test(text);
-}
-
-function extractRecentSemanticStatements(messages = []) {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return [];
-  }
-
-  const candidates = [];
-  for (let index = Math.max(0, messages.length - 6); index < messages.length; index += 1) {
-    const message = messages[index];
-    const role = messageRole(message);
-    if (role !== 'user') {
-      continue;
-    }
-
-    const text = compactWhitespace(asMessageText(message));
-    if (!text) {
-      continue;
-    }
-
-    for (const statement of splitIntoStatements(text)) {
-      const cleaned = sanitizeStatement(statement);
-      if (!cleaned || isForbiddenStatement(cleaned) || !isDurableSemanticStatement(cleaned)) {
-        continue;
-      }
-      candidates.push(cleaned);
-    }
-  }
-
-  return [...new Set(candidates)].slice(-4);
 }
 
 

@@ -55,9 +55,8 @@
         "additionalProperties": false,
         "properties": {
           "maxTailMessages": { "type": "integer", "minimum": 1 },
-          "provider": { "type": "string" },
-          "gateModel": { "type": "string" },
-          "extractModel": { "type": "string" }
+          "gateModel": { "type": "string", "description": "Gate model as provider/model (e.g. openai-codex/gpt-5.4-mini). Returns TRUE/FALSE only." },
+          "extractModel": { "type": "string", "description": "Extract model as provider/model (e.g. openai-codex/gpt-5.2-codex). Performs semantic extraction." }
         }
       },
       "export": {

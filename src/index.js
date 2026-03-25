@@ -12,6 +12,7 @@ import { createLogger } from './logger.js';
 import { materializeExportEnvelope } from './materialization.js';
 import { buildRecentRecallPacket } from './recall.js';
 import { buildAgentEndPayloadAsync } from './ingest.js';
+import { mergeCategoryEntries } from './category-store.js';
 import { createVestigeRecallProvider } from './provider.js';
 import { createSidecarClient } from './sidecar-client.js';
 import { registerSharedRecallProvider } from './shared-recall-registry.js';
@@ -175,6 +176,7 @@ export function createVestigeBridgeRuntime(options = {}) {
     debug: config.debug,
     prefix: `[${PLUGIN_ID}]`,
   });
+  const apiRuntime = options.apiRuntime ?? null;
   const client = createSidecarClient({
     baseUrl: config.baseUrl,
     authTokenPath: config.authTokenPath,
@@ -219,6 +221,7 @@ export function createVestigeBridgeRuntime(options = {}) {
   }
 
   async function agentEnd(event, ctx) {
+    logger.warn(`>>> AGENT_END_PROBE: success=${event?.success}, agent=${ctx?.agentId} <<<`);
     if (!config.enabled || !config.behavior.enableAgentEndIngest || !event?.success) {
       return undefined;
     }
@@ -232,10 +235,28 @@ export function createVestigeBridgeRuntime(options = {}) {
         config,
         ctx,
         logger,
+        runtime: apiRuntime,
       });
 
-      if (ingestPayload?.content) {
-        await runBestEffortOperation('smartIngest', ingestPayload, { config, logger, client }, 'agent_end');
+      if (Array.isArray(ingestPayload?.items) && ingestPayload.items.length > 0) {
+        const categoryEntries = {};
+        for (const item of ingestPayload.items) {
+          if (!item?.content) continue;
+          const result = await client.smartIngest({ content: item.content });
+          if (result?.ok) {
+            const nodeId = result.data?.nodeId || result.data?.node_id;
+            if (nodeId && item.category) {
+              categoryEntries[nodeId] = item.category;
+            }
+          } else {
+            logger.warn(`agent_end smartIngest item failed: ${result?.error ?? 'unknown'}`, { error: result?.error });
+          }
+        }
+        if (Object.keys(categoryEntries).length > 0) {
+          await mergeCategoryEntries(categoryEntries).catch((err) => {
+            logger.warn('agent_end category store write failed', { error: err?.message });
+          });
+        }
       }
 
       const promotePayload = toOperationPayload(
@@ -289,6 +310,7 @@ const plugin = {
       logger: api.logger,
       workspaceDir: api.config?.workspaceDir ?? api.workspaceDir ?? process.cwd(),
       fetchImpl: api.fetch,
+      apiRuntime: api.runtime,
     });
 
     if (runtime.config.recallMode === 'provider') {

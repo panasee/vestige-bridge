@@ -188,7 +188,7 @@ export function normalizeEntry(entry, options = {}) {
     text,
     normalizedText,
     statement: text,
-    score: toNumber(raw.score ?? raw.relevance ?? raw.retrieval_score),
+    score: toNumber(raw.score ?? raw.combinedScore ?? raw.relevance ?? raw.retrieval_score),
     confidence: toNumber(raw.confidence),
     materialized: toBoolean(raw.materialized)
       || Boolean(raw.materialized_generation)

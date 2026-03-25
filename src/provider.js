@@ -3,6 +3,7 @@ import { normalizeEntries, hashNormalizedText } from './normalize.js';
 import { collapseDuplicates } from './dedupe.js';
 import { deriveBucket } from './packing.js';
 import { renderVestigeBullet } from './render.js';
+import { lookupCategories } from './category-store.js';
 
 function dropWithReason(entry, reason, extra = {}) {
   return {
@@ -141,7 +142,16 @@ export async function collectRecentRecallCandidates({
     return [];
   }
 
-  const recentEntries = extractSearchItems(response.data);
+  const rawEntries = extractSearchItems(response.data);
+
+  // Attach stored category before normalization so deriveBucket can route correctly.
+  const entryIds = rawEntries.map((e) => e?.id).filter(Boolean);
+  const categoryMap = await lookupCategories(entryIds).catch(() => new Map());
+  const recentEntries = rawEntries.map((entry) => {
+    if (!entry?.id || !categoryMap.has(entry.id)) return entry;
+    return { ...entry, category: categoryMap.get(entry.id) };
+  });
+
   const result = buildRecentRecallCandidates({
     entries: recentEntries,
     materializedIds: collectMaterializedIds(ledger.data),

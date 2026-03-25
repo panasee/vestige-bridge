@@ -214,9 +214,8 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
       6,
       { min: 1 },
     ),
-    provider: parseString(firstDefined(rawIngest.provider, env('VESTIGE_BRIDGE_INGEST_PROVIDER')), ''),
-    gateModel: parseString(firstDefined(rawIngest.gateModel, env('VESTIGE_BRIDGE_INGEST_GATE_MODEL')), 'gpt-4o-mini'),
-    extractModel: parseString(firstDefined(rawIngest.extractModel, env('VESTIGE_BRIDGE_INGEST_EXTRACT_MODEL')), 'gpt-5.2'),
+    gateModel: parseString(firstDefined(rawIngest.gateModel, env('VESTIGE_BRIDGE_INGEST_GATE_MODEL')), ''),
+    extractModel: parseString(firstDefined(rawIngest.extractModel, env('VESTIGE_BRIDGE_INGEST_EXTRACT_MODEL')), ''),
   };
 
   const rawExport = rawConfig?.export ?? {};
