@@ -320,6 +320,44 @@ const plugin = {
     }
     api.on('agent_end', async (event, ctx) => runtime.agentEnd(event, ctx));
 
+    api.registerTool((ctx) => {
+      if (ctx?.config?.plugins?.slots?.memory !== PLUGIN_ID) return null;
+      return [
+        {
+          name: 'memory_store',
+          label: 'Memory Store',
+          description: 'Store a memory note into Vestige recent lane. Use for preferences, patterns, and short-term reminders.',
+          parameters: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', description: 'Markdown content to store' },
+              title: { type: 'string', description: 'Optional title hint (used as tag)' },
+              path: { type: 'string', description: 'Ignored (compatibility field)' },
+              dataset: { type: 'string', description: 'Ignored (compatibility field)' },
+              pinned: { type: 'boolean', description: 'Ignored (compatibility field)' },
+              scope: { type: 'string', description: 'Ignored (compatibility field)' },
+            },
+            required: ['text'],
+            additionalProperties: false,
+          },
+          async execute(_toolCallId, params) {
+            const result = await runtime.client.smartIngest({
+              content: params.text,
+              forceCreate: true,
+              ...(params.title ? { tags: [params.title] } : {}),
+            });
+            if (!result?.ok) {
+              return {
+                content: [{ type: 'text', text: `Failed to store memory: ${result?.error ?? 'unknown'}` }],
+                isError: true,
+              };
+            }
+            return { content: [{ type: 'text', text: 'Memory stored in Vestige.' }] };
+          },
+        },
+      ];
+    }, { names: ['memory_store'] });
+
     api.vestigeBridge = {
       exportStableNow: async (payload = {}) => runtime.explicitExport(payload),
       health: () => runtime.health(),

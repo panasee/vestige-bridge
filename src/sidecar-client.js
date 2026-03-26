@@ -416,7 +416,7 @@ export function createSidecarClient(options = {}) {
   }
 
   async function initializeSession() {
-    if (initialized && sessionId) {
+    if (initialized) {
       return { ok: true, sessionId };
     }
 
@@ -480,7 +480,17 @@ export function createSidecarClient(options = {}) {
     };
   }
 
-  async function callTool(toolName, argumentsPayload) {
+  function isRetryableToolCall404(response) {
+    if (!response || response.ok) {
+      return false;
+    }
+
+    return response.status === 404;
+  }
+
+  async function callTool(toolName, argumentsPayload, requestOptions = {}) {
+    const alreadyRetried = requestOptions.retryOn404 === false;
+
     const init = await initializeSession();
     if (!init.ok) {
       return init;
@@ -492,6 +502,26 @@ export function createSidecarClient(options = {}) {
     });
 
     if (!response.ok) {
+      if (!alreadyRetried && isRetryableToolCall404(response)) {
+        logger?.debug?.('vestige MCP tools/call returned 404; resetting session and retrying once', {
+          toolName,
+          sessionId,
+          status: response.status,
+        });
+        sessionId = null;
+        initialized = false;
+        toolCache = null;
+
+        const retryResponse = await callTool(toolName, argumentsPayload, { retryOn404: false });
+        if (!retryResponse.ok) {
+          logger?.debug?.('vestige MCP tools/call retry after session reset still failed', {
+            toolName,
+            status: retryResponse.status,
+            error: retryResponse.error,
+          });
+        }
+        return retryResponse;
+      }
       return response;
     }
 
@@ -527,7 +557,8 @@ export function createSidecarClient(options = {}) {
       const errorText = String(response.error || '');
       const unsupported = /unknown tool|method not found/i.test(errorText)
         || response.rpcError?.code === -32601
-        || response.data?.error === 'Unknown tool';
+        || response.data?.error === 'Unknown tool'
+        || response.status === 404;
 
       if (!unsupported) {
         return response;
