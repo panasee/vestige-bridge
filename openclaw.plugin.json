@@ -1,6 +1,7 @@
 {
   "id": "vestige-bridge",
   "name": "Vestige Bridge",
+  "hooks": ["hooks"],
   "description": "Bridge recent cognitive memory from a Vestige sidecar into OpenClaw runtime hooks.",
   "configSchema": {
     "type": "object",
@@ -55,6 +56,8 @@
         "additionalProperties": false,
         "properties": {
           "maxTailMessages": { "type": "integer", "minimum": 1 },
+          "maxPendingMessages": { "type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum pending raw messages to feed into extraction after watermark-based retrieval." },
+          "maxPendingCharacters": { "type": "integer", "minimum": 500, "maximum": 200000, "description": "Character budget for pending raw messages before truncation." },
           "gateModel": { "type": "string", "description": "Gate model as provider/model (e.g. openai-codex/gpt-5.4-mini). Returns TRUE/FALSE only." },
           "extractModel": { "type": "string", "description": "Extract model as provider/model (e.g. openai-codex/gpt-5.2-codex). Performs semantic extraction." }
         }
@@ -107,6 +110,39 @@
           "enableAgentEndIngest": {
             "type": "boolean",
             "description": "Enable best-effort smart-ingest during agent_end."
+          },
+          "triggerIngestOnSessionEnd": {
+            "type": "boolean",
+            "description": "Run vestige extraction evaluation on session:end hooks."
+          },
+          "triggerIngestOnCommandNew": {
+            "type": "boolean",
+            "description": "Run vestige extraction evaluation on command:new hooks, preferring previousSessionEntry."
+          },
+          "triggerIngestOnCommandReset": {
+            "type": "boolean",
+            "description": "Run vestige extraction evaluation on command:reset hooks, preferring previousSessionEntry."
+          },
+          "triggerIngestOnCommandCompact": {
+            "type": "boolean",
+            "description": "Run vestige extraction evaluation on command:compact when LCM state advanced."
+          },
+          "triggerIngestOnTime": {
+            "type": "boolean",
+            "description": "Enable time-based fallback extraction checks."
+          },
+          "triggerIntervalHours": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Minimum interval in hours for time-based extraction checks."
+          },
+          "lcmDbPath": {
+            "type": "string",
+            "description": "Optional override path to the LCM SQLite database."
+          },
+          "triggerLedgerPath": {
+            "type": "string",
+            "description": "Optional override path to the local trigger ledger JSON."
           }
         }
       }

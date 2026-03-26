@@ -42,7 +42,15 @@ export const DEFAULT_CONFIG = Object.freeze({
   }),
   behavior: Object.freeze({
     failSoft: true,
-    enableAgentEndIngest: true,
+    enableAgentEndIngest: false,
+    triggerIngestOnSessionEnd: true,
+    triggerIngestOnCommandNew: true,
+    triggerIngestOnCommandReset: true,
+    triggerIngestOnCommandCompact: true,
+    triggerIngestOnTime: true,
+    triggerIntervalHours: 12,
+    lcmDbPath: '',
+    triggerLedgerPath: '',
   }),
 });
 
@@ -214,6 +222,16 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
       6,
       { min: 1 },
     ),
+    maxPendingMessages: parseInteger(
+      firstDefined(rawIngest.maxPendingMessages, env('VESTIGE_BRIDGE_INGEST_MAX_PENDING_MESSAGES')),
+      24,
+      { min: 1, max: 500 },
+    ),
+    maxPendingCharacters: parseInteger(
+      firstDefined(rawIngest.maxPendingCharacters, env('VESTIGE_BRIDGE_INGEST_MAX_PENDING_CHARACTERS')),
+      12000,
+      { min: 500, max: 200000 },
+    ),
     gateModel: parseString(firstDefined(rawIngest.gateModel, env('VESTIGE_BRIDGE_INGEST_GATE_MODEL')), ''),
     extractModel: parseString(firstDefined(rawIngest.extractModel, env('VESTIGE_BRIDGE_INGEST_EXTRACT_MODEL')), ''),
   };
@@ -249,6 +267,39 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
     enableAgentEndIngest: parseBoolean(
       firstDefined(rawBehavior.enableAgentEndIngest, env('VESTIGE_BRIDGE_ENABLE_AGENT_END_INGEST')),
       DEFAULT_CONFIG.behavior.enableAgentEndIngest,
+    ),
+    triggerIngestOnSessionEnd: parseBoolean(
+      firstDefined(rawBehavior.triggerIngestOnSessionEnd, env('VESTIGE_BRIDGE_TRIGGER_ON_SESSION_END')),
+      DEFAULT_CONFIG.behavior.triggerIngestOnSessionEnd,
+    ),
+    triggerIngestOnCommandNew: parseBoolean(
+      firstDefined(rawBehavior.triggerIngestOnCommandNew, env('VESTIGE_BRIDGE_TRIGGER_ON_COMMAND_NEW')),
+      DEFAULT_CONFIG.behavior.triggerIngestOnCommandNew,
+    ),
+    triggerIngestOnCommandReset: parseBoolean(
+      firstDefined(rawBehavior.triggerIngestOnCommandReset, env('VESTIGE_BRIDGE_TRIGGER_ON_COMMAND_RESET')),
+      DEFAULT_CONFIG.behavior.triggerIngestOnCommandReset,
+    ),
+    triggerIngestOnCommandCompact: parseBoolean(
+      firstDefined(rawBehavior.triggerIngestOnCommandCompact, env('VESTIGE_BRIDGE_TRIGGER_ON_COMMAND_COMPACT')),
+      DEFAULT_CONFIG.behavior.triggerIngestOnCommandCompact,
+    ),
+    triggerIngestOnTime: parseBoolean(
+      firstDefined(rawBehavior.triggerIngestOnTime, env('VESTIGE_BRIDGE_TRIGGER_ON_TIME')),
+      DEFAULT_CONFIG.behavior.triggerIngestOnTime,
+    ),
+    triggerIntervalHours: parseInteger(
+      firstDefined(rawBehavior.triggerIntervalHours, env('VESTIGE_BRIDGE_TRIGGER_INTERVAL_HOURS')),
+      DEFAULT_CONFIG.behavior.triggerIntervalHours,
+      { min: 1, max: 168 },
+    ),
+    lcmDbPath: parseString(
+      firstDefined(rawBehavior.lcmDbPath, env('VESTIGE_BRIDGE_LCM_DB_PATH')),
+      DEFAULT_CONFIG.behavior.lcmDbPath,
+    ),
+    triggerLedgerPath: parseString(
+      firstDefined(rawBehavior.triggerLedgerPath, env('VESTIGE_BRIDGE_TRIGGER_LEDGER_PATH')),
+      DEFAULT_CONFIG.behavior.triggerLedgerPath,
     ),
   };
 

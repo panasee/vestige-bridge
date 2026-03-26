@@ -1,4 +1,7 @@
 import fs from 'node:fs/promises';
+import readline from 'node:readline';
+
+const HOUR_MS = 60 * 60 * 1000;
 
 import { resolvePluginConfig, shouldApplyToAgent } from './config.js';
 import { adaptExportFile } from './export-adapter.js';
@@ -16,6 +19,17 @@ import { mergeCategoryEntries } from './category-store.js';
 import { createVestigeRecallProvider } from './provider.js';
 import { createSidecarClient } from './sidecar-client.js';
 import { registerSharedRecallProvider } from './shared-recall-registry.js';
+import {
+  getSummaryWatermarkForConversation,
+  hasProcessedFingerprint,
+  loadTriggerLedger,
+  markProcessedFingerprint,
+  pruneProcessedFingerprints,
+  saveTriggerLedger,
+  updateMessageWatermark,
+  updateSummaryWatermark,
+} from './trigger-ledger.js';
+import { createLcmInspector } from './lcm-trigger.js';
 
 const PLUGIN_ID = 'vestige-bridge';
 const PLUGIN_NAME = 'Vestige Bridge';
@@ -87,8 +101,50 @@ function buildGenerationId(generatedAt) {
   return `${generatedAt}--vestige-export`;
 }
 
+async function readRecentMessagesFromSessionFile(sessionFile, maxMessages = 12) {
+  if (!sessionFile || typeof sessionFile !== 'string') {
+    return [];
+  }
+
+  try {
+    const stream = (await import('node:fs')).createReadStream(sessionFile, { encoding: 'utf8' });
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    const rows = [];
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        rows.push(parsed);
+      } catch {
+        // ignore malformed lines
+      }
+    }
+    return rows
+      .slice(-maxMessages)
+      .map((row) => ({ role: row?.role || 'assistant', content: typeof row?.content === 'string' ? row.content : '' }))
+      .filter((row) => row.content);
+  } catch {
+    return [];
+  }
+}
+
+function buildEventForSessionEntry(baseEvent, sessionEntry, messages) {
+  return {
+    ...baseEvent,
+    sessionEntry,
+    messages,
+  };
+}
+
 function buildExportFileName(generatedAt) {
   return `vestige-bridge-${generatedAt.replace(/[:.]/g, '-').replace(/\+00-00$/, 'Z')}.json`;
+}
+
+function computeTimeTriggerDelayMs(nowMs, intervalHours) {
+  const intervalMs = Math.max(1, intervalHours) * HOUR_MS;
+  const nextBoundaryMs = (Math.floor(nowMs / intervalMs) + 1) * intervalMs;
+  return Math.max(1_000, nextBoundaryMs - nowMs);
 }
 
 async function runExplicitExport(runtime, payload = {}) {
@@ -177,6 +233,7 @@ export function createVestigeBridgeRuntime(options = {}) {
     prefix: `[${PLUGIN_ID}]`,
   });
   const apiRuntime = options.apiRuntime ?? null;
+  let timeTriggerTimer = null;
   const client = createSidecarClient({
     baseUrl: config.baseUrl,
     authTokenPath: config.authTokenPath,
@@ -185,6 +242,7 @@ export function createVestigeBridgeRuntime(options = {}) {
     fetchImpl: options.fetchImpl,
   });
 
+  const lcmInspector = createLcmInspector(config);
   const recallProvider = createVestigeRecallProvider({ client, config, logger });
 
   async function beforePromptBuild(event, ctx) {
@@ -220,66 +278,332 @@ export function createVestigeBridgeRuntime(options = {}) {
     });
   }
 
+  async function runExistingIngestFlow(event, ctx, hookName = 'agent_end', ingestContext = {}) {
+    const ingestPayload = await buildAgentEndPayloadAsync({
+      messages: Array.isArray(ingestContext?.messages) ? ingestContext.messages : (Array.isArray(event?.messages) ? event.messages : []),
+      summaries: Array.isArray(ingestContext?.summaries) ? ingestContext.summaries : [],
+      trigger: ingestContext?.trigger || { kind: hookName },
+      config,
+      ctx,
+      logger,
+      runtime: apiRuntime,
+    });
+
+    if (Array.isArray(ingestPayload?.items) && ingestPayload.items.length > 0) {
+      const categoryEntries = {};
+      for (const item of ingestPayload.items) {
+        if (!item?.content) continue;
+        const result = await client.smartIngest({ content: item.content });
+        if (result?.ok) {
+          const nodeId = result.data?.nodeId || result.data?.node_id;
+          if (nodeId && item.category) {
+            categoryEntries[nodeId] = item.category;
+          }
+        } else {
+          logger.warn(`${hookName} smartIngest item failed: ${result?.error ?? 'unknown'}`, { error: result?.error });
+        }
+      }
+      if (Object.keys(categoryEntries).length > 0) {
+        await mergeCategoryEntries(categoryEntries).catch((err) => {
+          logger.warn(`${hookName} category store write failed`, { error: err?.message });
+        });
+      }
+    }
+
+    const promotePayload = toOperationPayload(
+      readVestigeInstruction(event, 'promoteMemory', 'promote_memory', 'promote-memory'),
+    );
+    const demotePayload = toOperationPayload(
+      readVestigeInstruction(event, 'demoteMemory', 'demote_memory', 'demote-memory'),
+    );
+    const consolidatePayload = toOperationPayload(
+      readVestigeInstruction(event, 'consolidate'),
+      {},
+    );
+    const markMaterializedPayload = toOperationPayload(
+      readVestigeInstruction(event, 'markMaterialized', 'mark_materialized', 'mark-materialized'),
+    );
+
+    await runBestEffortOperation('promoteMemory', promotePayload, { config, logger, client }, hookName);
+    await runBestEffortOperation('demoteMemory', demotePayload, { config, logger, client }, hookName);
+    await runBestEffortOperation('consolidate', consolidatePayload, { config, logger, client }, hookName);
+    await runBestEffortOperation('markMaterialized', markMaterializedPayload, { config, logger, client }, hookName);
+  }
+
+  function buildTriggerFingerprint(kind, event, ctx) {
+    const sessionId = event?.previousSessionEntry?.sessionId || event?.sessionEntry?.sessionId || ctx?.sessionId || 'unknown';
+    const rawStamp = event?.at || event?.timestamp || event?.endedAt || new Date().toISOString();
+    const parsed = Date.parse(rawStamp);
+    const bucketMs = kind === 'time' ? config.behavior.triggerIntervalHours * 60 * 60 * 1000 : 60 * 1000;
+    const stamp = Number.isFinite(parsed) ? new Date(Math.floor(parsed / bucketMs) * bucketMs).toISOString() : String(rawStamp);
+    return `${kind}:${sessionId}:${stamp}`;
+  }
+
+  async function maybeRunVestigeExtraction(trigger, event, ctx) {
+    return failSoft({ config, logger, client }, trigger.kind, async () => {
+      const loaded = await loadTriggerLedger(config);
+      let state = {
+        ...loaded.state,
+        processedFingerprints: pruneProcessedFingerprints(loaded.state?.processedFingerprints),
+      };
+
+      if (hasProcessedFingerprint(state, trigger.fingerprint)) {
+        logger.info('trigger deduped', { kind: trigger.kind, fingerprint: trigger.fingerprint });
+        return undefined;
+      }
+
+      const sessionIdForDelta = event?.previousSessionEntry?.sessionId || event?.sessionEntry?.sessionId || ctx?.sessionId || null;
+      const conversationForDelta = lcmInspector.getConversationForSession(sessionIdForDelta);
+      const summaryWatermark = getSummaryWatermarkForConversation(state, conversationForDelta?.conversationId ?? null);
+      const summaryCheck = lcmInspector.hasSummaryAdvanced(summaryWatermark, conversationForDelta?.conversationId ?? null);
+      const conversationId = conversationForDelta?.conversationId ?? null;
+      const messageDelta = lcmInspector.computeConversationMessageDelta(
+        conversationId,
+        state.lastMessageWatermark,
+      );
+      const nowIso = trigger.at || new Date().toISOString();
+      const hoursSinceSuccess = state.lastExtractSuccessAt
+        ? (Date.now() - Date.parse(state.lastExtractSuccessAt)) / (1000 * 60 * 60)
+        : Number.POSITIVE_INFINITY;
+
+      const shouldRunByTime = trigger.kind === 'time'
+        && config.behavior.triggerIngestOnTime
+        && hoursSinceSuccess >= config.behavior.triggerIntervalHours
+        && (summaryCheck.advanced || messageDelta.newMessages > 0);
+
+      const shouldRun =
+        (trigger.kind === 'command:new' && config.behavior.triggerIngestOnCommandNew && (summaryCheck.advanced || messageDelta.newMessages > 0))
+        || (trigger.kind === 'command:reset' && config.behavior.triggerIngestOnCommandReset && (summaryCheck.advanced || messageDelta.newMessages > 0))
+        || (trigger.kind === 'session:end' && config.behavior.triggerIngestOnSessionEnd && (summaryCheck.advanced || messageDelta.newMessages > 0))
+        || ((trigger.kind === 'session:compact' || trigger.kind === 'session:compact:after')
+          && config.behavior.triggerIngestOnCommandCompact
+          && (summaryCheck.advanced || messageDelta.newMessages > 0))
+        || shouldRunByTime;
+
+      logger.info('trigger evaluated', {
+        kind: trigger.kind,
+        fingerprint: trigger.fingerprint,
+        conversationId,
+        summaryAdvanced: summaryCheck.advanced,
+        newMessages: messageDelta.newMessages,
+        shouldRun,
+      });
+
+      state = {
+        ...state,
+        lastExtractAttemptAt: nowIso,
+      };
+
+      if (shouldRun) {
+        const sessionId = sessionIdForDelta;
+        const previousSeq = Number(state?.lastMessageWatermark?.[String(conversationId)] || 0);
+        const lcmMessages = lcmInspector.getConversationMessagesSince(
+          conversationId,
+          previousSeq,
+          config.ingest.maxPendingMessages || 24,
+        );
+        const pendingChars = lcmMessages.reduce((sum, msg) => sum + String(msg?.content || '').length, 0);
+        const trimmedLcmMessages = [];
+        let remainingChars = config.ingest.maxPendingCharacters || 12000;
+        let skippedEmptyPendingMessages = 0;
+        let truncatedByCharacterBudget = false;
+        for (let i = lcmMessages.length - 1; i >= 0; i -= 1) {
+          const msg = lcmMessages[i];
+          const text = String(msg?.content || '');
+          if (!text) {
+            skippedEmptyPendingMessages += 1;
+            continue;
+          }
+          if (trimmedLcmMessages.length > 0 && remainingChars <= 0) {
+            truncatedByCharacterBudget = true;
+            break;
+          }
+          trimmedLcmMessages.push(msg);
+          remainingChars -= text.length;
+        }
+        trimmedLcmMessages.reverse();
+        const droppedPendingMessages = Math.max(0, lcmMessages.length - trimmedLcmMessages.length - skippedEmptyPendingMessages);
+        logger.info('trigger ingest run starting', {
+          kind: trigger.kind,
+          fingerprint: trigger.fingerprint,
+          conversationId,
+          sessionId,
+          summaryWatermarkBefore: summaryWatermark,
+          summaryWatermarkAfter: summaryCheck.latest,
+          newMessages: messageDelta.newMessages,
+          previousSeq,
+          pendingMessagesFetched: lcmMessages.length,
+          pendingMessagesSelected: trimmedLcmMessages.length,
+          pendingMessagesDropped: droppedPendingMessages,
+          skippedEmptyPendingMessages,
+          pendingCharactersFetched: pendingChars,
+          pendingCharactersBudget: config.ingest.maxPendingCharacters || 12000,
+          pendingCharactersSelected: Math.max(0, (config.ingest.maxPendingCharacters || 12000) - remainingChars),
+          pendingCharactersRemaining: remainingChars,
+          truncatedByCharacterBudget,
+        });
+        const fallbackSessionMessages = lcmInspector.getRecentMessagesForSession(
+          sessionId,
+          config.ingest.maxTailMessages || 12,
+        );
+        const lcmSummaries = lcmInspector.getRecentSummariesSince(
+          summaryWatermark,
+          config.ingest.maxSummaryItems || 8,
+          conversationId,
+        );
+        logger.info('trigger ingest context prepared', {
+          kind: trigger.kind,
+          fingerprint: trigger.fingerprint,
+          conversationId,
+          sessionId,
+          selectedRawSource: trimmedLcmMessages.length > 0
+            ? 'conversation_pending'
+            : (fallbackSessionMessages.length > 0 ? 'session_fallback' : 'event_fallback'),
+          rawMessagesCount: trimmedLcmMessages.length > 0
+            ? trimmedLcmMessages.length
+            : (fallbackSessionMessages.length > 0 ? fallbackSessionMessages.length : (Array.isArray(event?.messages) ? event.messages.length : 0)),
+          summaryCount: lcmSummaries.length,
+          summaryAdvanced: summaryCheck.advanced,
+          newMessages: messageDelta.newMessages,
+        });
+        await runExistingIngestFlow(event, ctx, trigger.kind, {
+          messages: trimmedLcmMessages.length > 0
+            ? trimmedLcmMessages
+            : (fallbackSessionMessages.length > 0
+                ? fallbackSessionMessages
+                : (Array.isArray(event?.messages) ? event.messages : [])),
+          summaries: lcmSummaries,
+          trigger: {
+            kind: trigger.kind,
+            at: nowIso,
+            summaryAdvanced: summaryCheck.advanced,
+            newMessages: messageDelta.newMessages,
+            fingerprint: trigger.fingerprint,
+            sessionId,
+            conversationId,
+          },
+        });
+        state = {
+          ...state,
+          lastExtractSuccessAt: nowIso,
+        };
+        logger.info('trigger ingest run finished', {
+          kind: trigger.kind,
+          fingerprint: trigger.fingerprint,
+          conversationId,
+          sessionId,
+          lastExtractSuccessAt: nowIso,
+          updatedMessageWatermark: messageDelta.nextWatermark,
+          updatedSummaryWatermark: summaryCheck.latest,
+        });
+      } else {
+        logger.info('trigger skipped', {
+          kind: trigger.kind,
+          fingerprint: trigger.fingerprint,
+          reason: 'no_lcm_delta_or_trigger_disabled',
+          summaryAdvanced: summaryCheck.advanced,
+          newMessages: messageDelta.newMessages,
+        });
+      }
+
+      state = updateSummaryWatermark(state, conversationId, summaryCheck.latest);
+      state = updateMessageWatermark(state, messageDelta.nextWatermark);
+      state = markProcessedFingerprint(state, trigger.fingerprint, nowIso);
+      await saveTriggerLedger(loaded.path, state);
+      logger.info('trigger ledger updated', {
+        path: loaded.path,
+        kind: trigger.kind,
+        fingerprint: trigger.fingerprint,
+        lastExtractAttemptAt: state.lastExtractAttemptAt,
+        lastExtractSuccessAt: state.lastExtractSuccessAt,
+        lastSummaryWatermarkByConversation: state.lastSummaryWatermarkByConversation,
+      });
+      return undefined;
+    });
+  }
+
   async function agentEnd(event, ctx) {
-    logger.warn(`>>> AGENT_END_PROBE: success=${event?.success}, agent=${ctx?.agentId} <<<`);
     if (!config.enabled || !config.behavior.enableAgentEndIngest || !event?.success) {
       return undefined;
     }
+    logger.warn(`>>> AGENT_END_PROBE: success=${event?.success}, agent=${ctx?.agentId} <<<`);
     if (!shouldApplyToAgent(config.enabledAgents, ctx?.agentId)) {
       return undefined;
     }
 
     return failSoft({ config, logger, client }, 'agent_end', async () => {
-      const ingestPayload = await buildAgentEndPayloadAsync({
-        messages: Array.isArray(event?.messages) ? event.messages : [],
-        config,
-        ctx,
-        logger,
-        runtime: apiRuntime,
-      });
-
-      if (Array.isArray(ingestPayload?.items) && ingestPayload.items.length > 0) {
-        const categoryEntries = {};
-        for (const item of ingestPayload.items) {
-          if (!item?.content) continue;
-          const result = await client.smartIngest({ content: item.content });
-          if (result?.ok) {
-            const nodeId = result.data?.nodeId || result.data?.node_id;
-            if (nodeId && item.category) {
-              categoryEntries[nodeId] = item.category;
-            }
-          } else {
-            logger.warn(`agent_end smartIngest item failed: ${result?.error ?? 'unknown'}`, { error: result?.error });
-          }
-        }
-        if (Object.keys(categoryEntries).length > 0) {
-          await mergeCategoryEntries(categoryEntries).catch((err) => {
-            logger.warn('agent_end category store write failed', { error: err?.message });
-          });
-        }
-      }
-
-      const promotePayload = toOperationPayload(
-        readVestigeInstruction(event, 'promoteMemory', 'promote_memory', 'promote-memory'),
-      );
-      const demotePayload = toOperationPayload(
-        readVestigeInstruction(event, 'demoteMemory', 'demote_memory', 'demote-memory'),
-      );
-      const consolidatePayload = toOperationPayload(
-        readVestigeInstruction(event, 'consolidate'),
-        {},
-      );
-      const markMaterializedPayload = toOperationPayload(
-        readVestigeInstruction(event, 'markMaterialized', 'mark_materialized', 'mark-materialized'),
-      );
-
-      await runBestEffortOperation('promoteMemory', promotePayload, { config, logger, client }, 'agent_end');
-      await runBestEffortOperation('demoteMemory', demotePayload, { config, logger, client }, 'agent_end');
-      await runBestEffortOperation('consolidate', consolidatePayload, { config, logger, client }, 'agent_end');
-      await runBestEffortOperation('markMaterialized', markMaterializedPayload, { config, logger, client }, 'agent_end');
-
+      await runExistingIngestFlow(event, ctx, 'agent_end');
       return undefined;
     });
+  }
+
+  async function commandNew(event, ctx) {
+    if (!config.enabled || !shouldApplyToAgent(config.enabledAgents, ctx?.agentId)) return undefined;
+    const previousSessionEntry = event?.previousSessionEntry || event?.context?.previousSessionEntry;
+    const messages = await readRecentMessagesFromSessionFile(previousSessionEntry?.sessionFile, config.ingest.maxTailMessages || 6);
+    const eventForOldSession = buildEventForSessionEntry(event, previousSessionEntry || event?.sessionEntry, messages);
+    const trigger = { kind: 'command:new', at: new Date().toISOString(), fingerprint: buildTriggerFingerprint('command:new', eventForOldSession, ctx) };
+    return maybeRunVestigeExtraction(trigger, eventForOldSession, ctx);
+  }
+
+  async function commandReset(event, ctx) {
+    if (!config.enabled || !shouldApplyToAgent(config.enabledAgents, ctx?.agentId)) return undefined;
+    const previousSessionEntry = event?.previousSessionEntry || event?.context?.previousSessionEntry;
+    const messages = await readRecentMessagesFromSessionFile(previousSessionEntry?.sessionFile, config.ingest.maxTailMessages || 6);
+    const eventForOldSession = buildEventForSessionEntry(event, previousSessionEntry || event?.sessionEntry, messages);
+    const trigger = { kind: 'command:reset', at: new Date().toISOString(), fingerprint: buildTriggerFingerprint('command:reset', eventForOldSession, ctx) };
+    return maybeRunVestigeExtraction(trigger, eventForOldSession, ctx);
+  }
+
+  async function commandCompact(event, ctx) {
+    if (!config.enabled || !shouldApplyToAgent(config.enabledAgents, ctx?.agentId)) return undefined;
+    const triggerKind = event?.type === 'session' && event?.action === 'compact:after'
+      ? 'session:compact:after'
+      : 'session:compact';
+    const trigger = { kind: triggerKind, at: new Date().toISOString(), fingerprint: buildTriggerFingerprint(triggerKind, event, ctx) };
+    return maybeRunVestigeExtraction(trigger, event, ctx);
+  }
+
+  async function sessionEnd(event, ctx) {
+    if (!config.enabled) return undefined;
+    const kind = event?.type === 'time' ? 'time' : 'session:end';
+    if (kind !== 'time' && !shouldApplyToAgent(config.enabledAgents, ctx?.agentId)) return undefined;
+    const sessionEntry = event?.sessionEntry || event?.context?.sessionEntry;
+    const messages = await readRecentMessagesFromSessionFile(sessionEntry?.sessionFile, config.ingest.maxTailMessages || 6);
+    const eventForSession = buildEventForSessionEntry(event, sessionEntry, messages);
+    const trigger = { kind, at: new Date().toISOString(), fingerprint: buildTriggerFingerprint(kind, eventForSession, ctx) };
+    return maybeRunVestigeExtraction(trigger, eventForSession, ctx);
+  }
+
+  function cancelTimeTrigger() {
+    if (timeTriggerTimer) {
+      clearTimeout(timeTriggerTimer);
+      timeTriggerTimer = null;
+    }
+  }
+
+  function scheduleNextTimeTrigger(ctx = {}) {
+    cancelTimeTrigger();
+    if (!config.enabled || !config.behavior.triggerIngestOnTime) {
+      return;
+    }
+    const delayMs = computeTimeTriggerDelayMs(Date.now(), config.behavior.triggerIntervalHours);
+    logger.info('time trigger scheduled', {
+      delayMs,
+      triggerIntervalHours: config.behavior.triggerIntervalHours,
+    });
+    timeTriggerTimer = setTimeout(async () => {
+      try {
+        await sessionEnd({ type: 'time', action: 'time', timestamp: new Date().toISOString() }, ctx);
+      } catch (error) {
+        logger.warn('time trigger execution failed', { error: error?.message ?? String(error) });
+      } finally {
+        scheduleNextTimeTrigger(ctx);
+      }
+    }, delayMs);
+    if (typeof timeTriggerTimer?.unref === 'function') {
+      timeTriggerTimer.unref();
+    }
   }
 
   return {
@@ -294,6 +618,12 @@ export function createVestigeBridgeRuntime(options = {}) {
     },
     beforePromptBuild,
     agentEnd,
+    commandNew,
+    commandReset,
+    commandCompact,
+    sessionEnd,
+    scheduleNextTimeTrigger,
+    cancelTimeTrigger,
     explicitExport(payload = {}) {
       return failSoft({ config, logger, client }, 'explicit_export', () => runExplicitExport({ config, logger, client }, payload));
     },
@@ -363,6 +693,7 @@ const plugin = {
       health: () => runtime.health(),
       getConfig: () => runtime.config,
       getRecallProvider: () => runtime.getRecallProvider(),
+      triggerTimeIngestCheck: async (ctx = {}) => runtime.sessionEnd({ type: 'time', action: 'time', timestamp: new Date().toISOString() }, ctx),
     };
   },
 };
