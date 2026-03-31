@@ -29,6 +29,19 @@ export const DEFAULT_CONFIG = Object.freeze({
     hardCap: 320,
     skipMaterialized: true,
     maxTailMessages: 8,
+    freshnessHints: true,
+    freshnessDays: 14,
+  }),
+  ingest: Object.freeze({
+    maxTailMessages: 6,
+    maxPendingMessages: 24,
+    maxPendingCharacters: 12000,
+    gateModel: '',
+    extractModel: '',
+    maxItems: 5,
+    includeExistingMemorySynopsis: true,
+    existingMemoryMaxItems: 3,
+    existingMemoryMaxChars: 700,
   }),
   packing: Object.freeze({
     bucketPriority: DEFAULT_BUCKET_PRIORITY,
@@ -201,27 +214,55 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
       DEFAULT_CONFIG.recall.maxTailMessages,
       { min: 1 },
     ),
+    freshnessHints: parseBoolean(
+      firstDefined(rawRecall.freshnessHints, env('VESTIGE_BRIDGE_RECALL_FRESHNESS_HINTS')),
+      DEFAULT_CONFIG.recall.freshnessHints,
+    ),
+    freshnessDays: parseInteger(
+      firstDefined(rawRecall.freshnessDays, env('VESTIGE_BRIDGE_RECALL_FRESHNESS_DAYS')),
+      DEFAULT_CONFIG.recall.freshnessDays,
+      { min: 1, max: 3650 },
+    ),
   };
 
   const rawIngest = rawConfig?.ingest ?? {};
   const ingest = {
     maxTailMessages: parseInteger(
       firstDefined(rawIngest.maxTailMessages, env('VESTIGE_BRIDGE_INGEST_MAX_TAIL_MESSAGES')),
-      6,
+      DEFAULT_CONFIG.ingest.maxTailMessages,
       { min: 1 },
     ),
     maxPendingMessages: parseInteger(
       firstDefined(rawIngest.maxPendingMessages, env('VESTIGE_BRIDGE_INGEST_MAX_PENDING_MESSAGES')),
-      24,
+      DEFAULT_CONFIG.ingest.maxPendingMessages,
       { min: 1, max: 500 },
     ),
     maxPendingCharacters: parseInteger(
       firstDefined(rawIngest.maxPendingCharacters, env('VESTIGE_BRIDGE_INGEST_MAX_PENDING_CHARACTERS')),
-      12000,
+      DEFAULT_CONFIG.ingest.maxPendingCharacters,
       { min: 500, max: 200000 },
     ),
-    gateModel: parseString(firstDefined(rawIngest.gateModel, env('VESTIGE_BRIDGE_INGEST_GATE_MODEL')), ''),
-    extractModel: parseString(firstDefined(rawIngest.extractModel, env('VESTIGE_BRIDGE_INGEST_EXTRACT_MODEL')), ''),
+    gateModel: parseString(firstDefined(rawIngest.gateModel, env('VESTIGE_BRIDGE_INGEST_GATE_MODEL')), DEFAULT_CONFIG.ingest.gateModel),
+    extractModel: parseString(firstDefined(rawIngest.extractModel, env('VESTIGE_BRIDGE_INGEST_EXTRACT_MODEL')), DEFAULT_CONFIG.ingest.extractModel),
+    maxItems: parseInteger(
+      firstDefined(rawIngest.maxItems, env('VESTIGE_BRIDGE_INGEST_MAX_ITEMS')),
+      DEFAULT_CONFIG.ingest.maxItems,
+      { min: 1, max: 20 },
+    ),
+    includeExistingMemorySynopsis: parseBoolean(
+      firstDefined(rawIngest.includeExistingMemorySynopsis, env('VESTIGE_BRIDGE_INGEST_INCLUDE_EXISTING_MEMORY_SYNOPSIS')),
+      DEFAULT_CONFIG.ingest.includeExistingMemorySynopsis,
+    ),
+    existingMemoryMaxItems: parseInteger(
+      firstDefined(rawIngest.existingMemoryMaxItems, env('VESTIGE_BRIDGE_INGEST_EXISTING_MEMORY_MAX_ITEMS')),
+      DEFAULT_CONFIG.ingest.existingMemoryMaxItems,
+      { min: 1, max: 10 },
+    ),
+    existingMemoryMaxChars: parseInteger(
+      firstDefined(rawIngest.existingMemoryMaxChars, env('VESTIGE_BRIDGE_INGEST_EXISTING_MEMORY_MAX_CHARS')),
+      DEFAULT_CONFIG.ingest.existingMemoryMaxChars,
+      { min: 100, max: 4000 },
+    ),
   };
 
   const rawPacking = rawConfig?.packing ?? {};

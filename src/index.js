@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import readline from 'node:readline';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -6,6 +8,7 @@ import { resolvePluginConfig, shouldApplyToAgent } from './config.js';
 import { collectCrystallizedVestigeIds, loadCrystallizerMaterializedSources } from './crystallizer-ledger.js';
 import { createLogger } from './logger.js';
 import { buildRecentRecallPacket } from './recall.js';
+import { buildRecallQuery } from './query-builder.js';
 import { buildAgentEndPayloadAsync } from './ingest.js';
 import { mergeCategoryEntries } from './category-store.js';
 import { createVestigeRecallProvider } from './provider.js';
@@ -26,6 +29,80 @@ import { createLcmInspector, validateLcmSchema } from './lcm-trigger.js';
 const PLUGIN_ID = 'vestige-bridge';
 const PLUGIN_NAME = 'Vestige Bridge';
 const PLUGIN_DESCRIPTION = 'Vestige recent-memory bridge for recent recall, ingest, and LCM-triggered maintenance.';
+
+async function readRecentMessagesFromSessionFile(sessionFile, limit = 6) {
+  if (!sessionFile || typeof sessionFile !== 'string') {
+    return [];
+  }
+
+  const candidates = [sessionFile];
+  try {
+    const dir = path.dirname(sessionFile);
+    const base = path.basename(sessionFile);
+    const siblings = await fs.readdir(dir);
+    const resetCandidates = siblings
+      .filter((name) => name.startsWith(`${base}.reset.`))
+      .sort()
+      .reverse()
+      .map((name) => path.join(dir, name));
+    candidates.push(...resetCandidates);
+  } catch {
+    // ignore reset-fallback discovery failure
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const raw = await fs.readFile(candidate, 'utf8');
+      const lines = raw.split('\n').filter(Boolean);
+      const messages = [];
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          if (entry?.type !== 'message' || !entry?.message) {
+            continue;
+          }
+          const role = entry.message.role;
+          if (role !== 'user' && role !== 'assistant' && role !== 'system') {
+            continue;
+          }
+          const content = Array.isArray(entry.message.content)
+            ? entry.message.content.find((part) => part?.type === 'text')?.text
+            : entry.message.content;
+          const text = typeof content === 'string' ? content.trim() : '';
+          if (!text || text.startsWith('/')) {
+            continue;
+          }
+          messages.push({ role, content: text });
+        } catch {
+          // ignore malformed transcript lines
+        }
+      }
+      if (messages.length > 0) {
+        return messages.slice(-Math.max(1, limit));
+      }
+    } catch {
+      // try next fallback candidate
+    }
+  }
+
+  return [];
+}
+
+function buildEventForSessionEntry(event, sessionEntry, messages = []) {
+  return {
+    ...event,
+    sessionEntry: sessionEntry || event?.sessionEntry || null,
+    previousSessionEntry: event?.previousSessionEntry || null,
+    messages,
+    timestamp: event?.timestamp || new Date().toISOString(),
+  };
+}
+
+function computeTimeTriggerDelayMs(nowMs = Date.now(), intervalHours = 12) {
+  const intervalMs = Math.max(1, Number(intervalHours) || 12) * HOUR_MS;
+  const nextBoundary = Math.floor(nowMs / intervalMs) * intervalMs + intervalMs;
+  return Math.max(1000, nextBoundary - nowMs);
+}
 
 function toOperationPayload(value, fallbackPayload) {
   if (value === undefined || value === null || value === false) {
@@ -157,10 +234,52 @@ export function createVestigeBridgeRuntime(options = {}) {
     });
   }
 
+  async function loadExistingMemorySynopsis(messages = [], loggerInstance = logger) {
+    if (!config?.ingest?.includeExistingMemorySynopsis) {
+      return [];
+    }
+
+    const { query } = buildRecallQuery({
+      messages,
+      maxChars: 320,
+      latestChars: 180,
+      tailChars: 120,
+      hintChars: 60,
+    });
+
+    if (!query) {
+      return [];
+    }
+
+    try {
+      const response = await client.search({
+        query,
+        maxResults: config?.ingest?.existingMemoryMaxItems || 3,
+        maxTokens: Math.max(80, Math.min(220, config?.recall?.maxTokens || 220)),
+        skipMaterialized: false,
+      });
+      if (!response?.ok) {
+        loggerInstance?.warn?.(`existing memory synopsis search failed: ${response?.error || 'unknown error'}`);
+        return [];
+      }
+      const payload = response.data;
+      const items = Array.isArray(payload)
+        ? payload
+        : payload?.items || payload?.results || payload?.memories || payload?.matches || payload?.data || [];
+      return Array.isArray(items) ? items : [];
+    } catch (error) {
+      loggerInstance?.warn?.(`existing memory synopsis lookup failed: ${error?.message || String(error)}`);
+      return [];
+    }
+  }
+
   async function runExistingIngestFlow(event, ctx, hookName = 'agent_end', ingestContext = {}) {
+    const effectiveMessages = Array.isArray(ingestContext?.messages) ? ingestContext.messages : (Array.isArray(event?.messages) ? event.messages : []);
+    const existingMemories = await loadExistingMemorySynopsis(effectiveMessages);
     const ingestPayload = await buildAgentEndPayloadAsync({
-      messages: Array.isArray(ingestContext?.messages) ? ingestContext.messages : (Array.isArray(event?.messages) ? event.messages : []),
+      messages: effectiveMessages,
       summaries: Array.isArray(ingestContext?.summaries) ? ingestContext.summaries : [],
+      existingMemories,
       trigger: ingestContext?.trigger || { kind: hookName },
       config,
       ctx,
@@ -531,8 +650,6 @@ const plugin = {
     } else {
       api.on('before_prompt_build', async (event, ctx) => runtime.beforePromptBuild(event, ctx));
     }
-    api.on('agent_end', async (event, ctx) => runtime.agentEnd(event, ctx));
-
     api.registerTool((ctx) => {
       if (ctx?.config?.plugins?.slots?.memory !== PLUGIN_ID) return null;
       return [

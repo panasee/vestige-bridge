@@ -184,6 +184,8 @@ export async function buildRecentRecallPacket({
     },
     renderOptions: {
       maxChars: Math.max(config.recall.hardCap * 4, 800),
+      enabled: config?.recall?.freshnessHints !== false,
+      thresholdDays: config?.recall?.freshnessDays,
     },
   });
 

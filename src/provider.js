@@ -74,6 +74,8 @@ export function buildRecentRecallCandidates({
   entries = [],
   materializedIds,
   skipMaterialized = true,
+  freshnessHints = true,
+  freshnessDays = 14,
 } = {}) {
   const normalizedRecent = normalizeEntries(entries, {
     defaultSource: 'vestige',
@@ -103,7 +105,10 @@ export function buildRecentRecallCandidates({
   const collapsed = collapseDuplicates(filteredRecent);
   const kept = collapsed.kept.map((entry) => {
     const bucket = mapBucketName(deriveBucket(entry));
-    const text = renderVestigeBullet({ ...entry, label: bucket });
+    const text = renderVestigeBullet({ ...entry, label: bucket }, {
+      enabled: freshnessHints !== false,
+      thresholdDays: freshnessDays,
+    });
     return {
       canonicalKey: entry.id ? `vestige:${entry.id}` : `vestige:${hashNormalizedText(entry.text)}`,
       lane: 'recent',
@@ -171,6 +176,8 @@ export async function collectRecentRecallCandidates({
     entries: recentEntries,
     materializedIds: suppressedVestigeIds,
     skipMaterialized: config.recall.skipMaterialized,
+    freshnessHints: config?.recall?.freshnessHints !== false,
+    freshnessDays: config?.recall?.freshnessDays,
   });
 
   logger?.debug?.('provider recent recall candidates prepared', {

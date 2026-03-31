@@ -6,6 +6,8 @@
  */
 
 import { invokeLlm } from './llm.js';
+import { normalizeEntries } from './normalize.js';
+import { renderVestigeBullet } from './render.js';
 
 function compactWhitespace(text) {
   return String(text || '')
@@ -109,13 +111,55 @@ function renderRecentSummarySection(summaries = [], summaryLimit = 8) {
     .join('\n');
 }
 
-function buildEvaluationContext({ messages = [], summaries = [], trigger = {}, config = {} }) {
+function takeBoundedLines(lines, maxChars) {
+  const bounded = [];
+  let total = 0;
+  for (const line of lines) {
+    const next = String(line || '').trim();
+    if (!next) continue;
+    const size = next.length + 1;
+    if (bounded.length > 0 && total + size > maxChars) {
+      break;
+    }
+    bounded.push(next);
+    total += size;
+  }
+  return bounded;
+}
+
+export function buildExistingMemorySynopsisSection(existingMemories = [], config = {}) {
+  if (!config?.ingest?.includeExistingMemorySynopsis || !Array.isArray(existingMemories) || existingMemories.length === 0) {
+    return '';
+  }
+
+  const maxItems = Number.isInteger(config?.ingest?.existingMemoryMaxItems) ? config.ingest.existingMemoryMaxItems : 3;
+  const maxChars = Number.isInteger(config?.ingest?.existingMemoryMaxChars) ? config.ingest.existingMemoryMaxChars : 700;
+
+  const normalized = normalizeEntries(existingMemories, {
+    defaultSource: 'vestige',
+    defaultLayer: 'recent',
+  }).slice(0, Math.max(1, maxItems));
+
+  const lines = takeBoundedLines(
+    normalized.map((entry) => renderVestigeBullet(entry, { enabled: false })),
+    Math.max(100, maxChars),
+  );
+
+  if (lines.length === 0) {
+    return '';
+  }
+
+  return ['Existing Related Memory Synopsis:', ...lines].join('\n');
+}
+
+export function buildEvaluationContext({ messages = [], summaries = [], existingMemories = [], trigger = {}, config = {} }) {
   const tailLimit = config?.ingest?.maxTailMessages || 12;
   const summaryLimit = config?.ingest?.maxSummaryItems || 8;
   const rawSection = renderRecentRawSection(messages, tailLimit);
   const summarySection = renderRecentSummarySection(summaries, summaryLimit);
+  const existingMemorySection = buildExistingMemorySynopsisSection(existingMemories, config);
 
-  if (!rawSection && !summarySection) {
+  if (!rawSection && !summarySection && !existingMemorySection) {
     return '';
   }
 
@@ -130,6 +174,11 @@ function buildEvaluationContext({ messages = [], summaries = [], trigger = {}, c
   if (triggerAt) sections.push(`- at: ${triggerAt}`);
   if (typeof summaryAdvanced === 'boolean') sections.push(`- summary_advanced: ${summaryAdvanced}`);
   if (typeof newMessages === 'number') sections.push(`- new_messages_since_watermark: ${newMessages}`);
+
+  if (existingMemorySection) {
+    sections.push('');
+    sections.push(existingMemorySection);
+  }
 
   if (rawSection) {
     sections.push('');
@@ -146,12 +195,13 @@ function buildEvaluationContext({ messages = [], summaries = [], trigger = {}, c
   return sections.join('\n');
 }
 
-export async function buildAgentEndPayloadAsync({ messages = [], summaries = [], trigger = {}, config = {}, ctx, logger, runtime }) {
+export async function buildAgentEndPayloadAsync({ messages = [], summaries = [], existingMemories = [], trigger = {}, config = {}, ctx, logger, runtime }) {
   const gateModel = config?.ingest?.gateModel || '';
   const extractModel = config?.ingest?.extractModel || '';
+  const maxItems = Number.isInteger(config?.ingest?.maxItems) ? config.ingest.maxItems : 5;
   const agentId = ctx?.agentId || '';
 
-  const evaluationContext = buildEvaluationContext({ messages, summaries, trigger, config });
+  const evaluationContext = buildEvaluationContext({ messages, summaries, existingMemories, trigger, config });
   if (!evaluationContext) {
     return null;
   }
@@ -160,28 +210,43 @@ export async function buildAgentEndPayloadAsync({ messages = [], summaries = [],
     triggerKind: trigger?.kind || 'unknown',
     rawMessages: Array.isArray(messages) ? messages.length : 0,
     summaries: Array.isArray(summaries) ? summaries.length : 0,
+    existingMemories: Array.isArray(existingMemories) ? existingMemories.length : 0,
   });
 
   const gateSystemPrompt = `You are a long-term memory gate for an assistant.
 Your job is to decide whether the provided context contains durable memories worth storing.
 
+Open the gate only for information that is likely to remain useful across future sessions.
+
 Durable memories include:
 - Explicit remember requests
 - Stable user preferences or dislikes
 - Hard rules, constraints, and non-negotiables
-- Important persistent project facts or ongoing project momentum
+- Important persistent project facts or long-lived project direction
 - Verified root causes or reusable fix patterns
 - Stable life/work/environment facts
 - Explicit corrections to previous remembered behavior
+- Durable architectural decisions or rejected fallback paths that will matter again later
 
-Do NOT open the gate for:
+Use a durability rubric, not a hard blacklist.
+Implementation details may justify opening the gate only when they clearly support a reusable long-term rule, correction, constraint, or project-level takeaway.
+
+Usually keep the gate CLOSED for:
 - Ephemeral debugging chatter
 - Transient intermediate hypotheses
 - One-off task steps with no reuse value
 - Repetition of already-obvious short-lived context
+- Changelog-style implementation updates
+- Test additions, test assertions, or file-by-file edit summaries
+- Temporary current-state / next-step planning notes
+- Raw file paths, command output, stack traces, and code snippets that do not imply a durable rule
+
+If the context mostly contains implementation churn, testing details, file paths, code snippets, command output, or temporary progress updates, keep the gate CLOSED unless they clearly imply a reusable long-term rule.
+When uncertain, prefer FALSE.
 
 The input may contain both recent raw conversation and recent LCM summaries.
-Use both. Summaries may carry cross-turn distilled context; raw conversation may contain newer facts not yet summarized.
+It may also contain a short synopsis of already-known related memories.
+Use that synopsis to avoid opening the gate for mere restatements of what is already remembered.
 
 Reply ONLY with "TRUE" if there is at least one durable memory worth extracting, or "FALSE" otherwise.`;
 
@@ -215,11 +280,29 @@ The input may include:
 - Recent raw conversation
 - Recent LCM summaries
 - Trigger metadata
+- A short synopsis of already-known related memories
 
 Use the summaries for cross-turn context and the raw conversation for newer unsummarized facts.
 Prefer stable, verified takeaways over intermediate chatter.
 If raw conversation and summaries conflict, prefer the more recent explicit correction in the raw conversation; otherwise prefer the more stable summarized fact.
 Do not duplicate the same idea in multiple phrasings.
+
+Your goal is to produce memory statements that remain useful when read alone in a future session.
+Rewrite implementation-specific observations into higher-level durable takeaways when possible.
+If a candidate memory cannot be rewritten into a standalone long-lived takeaway, omit it.
+Summarize into no more than ${maxItems} memory items total.
+If there are more than ${maxItems} plausible candidates, keep only the highest-value, most reusable, and most important ones, and omit the lower-priority items.
+Prefer fewer, stronger memories over a comprehensive list.
+
+Durability rubric:
+- Prefer stable preferences, constraints, verified root causes, reusable fixes, durable project direction, and explicit user corrections.
+- Usually skip temporary task state, step-by-step progress, implementation churn, command chatter, stack traces, test details, file-by-file edit notes, and raw code/config/path details.
+- Exception: if low-level details clearly support a reusable long-term rule, abstract that rule and store the abstraction instead of the raw detail.
+
+Existing-memory handling:
+- If the provided synopsis already covers the same idea, prefer to OMIT a duplicate restatement.
+- If the new context sharpens or corrects an existing memory, emit only the refined/corrected durable takeaway.
+- Prefer refine / correct / skip over parallel near-duplicate notes.
 
 Output format: one fact per line. Prefix each line with a category tag when applicable:
   [project]    - active project context or durable work momentum
@@ -232,8 +315,20 @@ Rules:
 - Be concise, direct, and factual.
 - Write from the assistant's remembering perspective.
 - Extract only facts worth retaining beyond the current session.
-- Do NOT include temporary task steps, transient debugging noise, stack traces, file paths, or code snippets unless they encode a reusable long-term rule or stable environment fact.
-- Do NOT wrap the output with prose or explanations.`;
+- Prefer mechanism-level abstractions over implementation surface details.
+- Remove file paths, test names, command lines, stack traces, code snippets, and changelog-style wording unless they are strictly necessary to preserve a durable rule.
+- Do NOT include temporary task steps, current progress notes, next-step plans, transient debugging noise, or one-off execution results.
+- Do NOT emit wrapper text, explanations, bullet numbering, or duplicate phrasings.
+- When uncertain, omit the item rather than storing a low-value memory.
+
+Good output style:
+- [constraint] Recent suppress must rely only on crystallizer success state.
+- [project] Durable materialization belongs to memory-crystallizer rather than vestige-bridge.
+
+Bad output style:
+- Updated src/provider.js to ...
+- Added test xyz to verify ...
+- Current active task is ...`;
 
   let extractResult = '';
   try {

@@ -72,6 +72,16 @@
           "maxTailMessages": {
             "type": "integer",
             "minimum": 1
+          },
+          "freshnessHints": {
+            "type": "boolean",
+            "description": "Attach age-based verification hints to time-sensitive recalled memories."
+          },
+          "freshnessDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3650,
+            "description": "Minimum age in days before time-sensitive memories receive a verification hint."
           }
         }
       },
@@ -102,6 +112,28 @@
           "extractModel": {
             "type": "string",
             "description": "Extract model as provider/model (e.g. openai-codex/gpt-5.2-codex). Performs semantic extraction."
+          },
+          "maxItems": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20,
+            "description": "Maximum number of durable memory items the extractor should emit from one extraction pass. Passed into the extraction prompt as a hard instruction."
+          },
+          "includeExistingMemorySynopsis": {
+            "type": "boolean",
+            "description": "Inject a small synopsis of existing related recent memories into extraction so the model can refine/skip instead of restating duplicates."
+          },
+          "existingMemoryMaxItems": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "description": "Maximum number of existing-memory synopsis bullets to include during extraction."
+          },
+          "existingMemoryMaxChars": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 4000,
+            "description": "Character budget for the existing-memory synopsis block injected into extraction."
           }
         }
       },
