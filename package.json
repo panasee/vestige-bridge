@@ -12,7 +12,7 @@
     "openclaw.plugin.json",
     "README.md"
   ],
-  "description": "OpenClaw plugin bridge for Vestige recent memory recall and explicit stable export materialization.",
+  "description": "OpenClaw plugin bridge for Vestige recent memory recall, ingest, and LCM-triggered maintenance.",
   "scripts": {
     "test": "node --test",
     "check": "node --eval \"import('./src/index.js').then(() => console.log('ok'))\"",

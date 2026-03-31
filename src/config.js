@@ -30,13 +30,6 @@ export const DEFAULT_CONFIG = Object.freeze({
     skipMaterialized: true,
     maxTailMessages: 8,
   }),
-  export: Object.freeze({
-    rootDir: 'memory/vestige',
-    ledgerPath: undefined,
-    tmpSuffix: '.tmp',
-    enableExplicit: true,
-    keepSourceExports: false,
-  }),
   packing: Object.freeze({
     bucketPriority: DEFAULT_BUCKET_PRIORITY,
   }),
@@ -157,11 +150,6 @@ function normalizeBucketPriority(value) {
   return normalized.length > 0 ? normalized : [...DEFAULT_BUCKET_PRIORITY];
 }
 
-function resolveRootDir(value, workspaceDir) {
-  const rootDir = parseString(value, DEFAULT_CONFIG.export.rootDir);
-  return path.isAbsolute(rootDir) ? rootDir : path.resolve(workspaceDir, rootDir);
-}
-
 export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()) {
   const enabled = parseBoolean(firstDefined(rawConfig.enabled, env('VESTIGE_BRIDGE_ENABLED')), DEFAULT_CONFIG.enabled);
   const enabledAgents = normalizeEnabledAgents(rawConfig.enabledAgents);
@@ -236,26 +224,6 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
     extractModel: parseString(firstDefined(rawIngest.extractModel, env('VESTIGE_BRIDGE_INGEST_EXTRACT_MODEL')), ''),
   };
 
-  const rawExport = rawConfig?.export ?? {};
-  const rootDir = resolveRootDir(firstDefined(rawExport.rootDir, env('VESTIGE_BRIDGE_EXPORT_ROOT_DIR')), workspaceDir);
-  const ledgerPathRaw = parseString(
-    firstDefined(rawExport.ledgerPath, env('VESTIGE_BRIDGE_EXPORT_LEDGER_PATH')),
-    DEFAULT_CONFIG.export.ledgerPath,
-  );
-  const exportConfig = {
-    rootDir,
-    ledgerPath: ledgerPathRaw,
-    tmpSuffix: parseString(firstDefined(rawExport.tmpSuffix, env('VESTIGE_BRIDGE_EXPORT_TMP_SUFFIX')), DEFAULT_CONFIG.export.tmpSuffix),
-    enableExplicit: parseBoolean(
-      firstDefined(rawExport.enableExplicit, env('VESTIGE_BRIDGE_EXPORT_ENABLE_EXPLICIT')),
-      DEFAULT_CONFIG.export.enableExplicit,
-    ),
-    keepSourceExports: parseBoolean(
-      firstDefined(rawExport.keepSourceExports, env('VESTIGE_BRIDGE_EXPORT_KEEP_SOURCE_EXPORTS')),
-      DEFAULT_CONFIG.export.keepSourceExports,
-    ),
-  };
-
   const rawPacking = rawConfig?.packing ?? {};
   const packing = {
     bucketPriority: normalizeBucketPriority(rawPacking.bucketPriority),
@@ -313,7 +281,6 @@ export function resolvePluginConfig(rawConfig = {}, workspaceDir = process.cwd()
     recallMode,
     recall,
     ingest,
-    export: exportConfig,
     packing,
     behavior,
     workspaceDir,

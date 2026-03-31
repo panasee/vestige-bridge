@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 
-import { buildRecentRecallCandidates } from '../src/provider.js';
+import { buildRecentRecallCandidates, collectRecentRecallCandidates } from '../src/provider.js';
 import { createVestigeBridgeRuntime } from '../src/index.js';
 import { resolvePluginConfig } from '../src/config.js';
 
@@ -54,7 +55,59 @@ test('buildRecentRecallCandidates suppresses materialized recent items', () => {
 
   assert.equal(result.candidates.length, 1);
   assert.equal(result.candidates[0].canonicalKey, 'vestige:keep-1');
-  assert.ok(result.dropped.some((entry) => entry.dropReasons.includes('suppressed_by_materialization_ledger')));
+  assert.ok(result.dropped.some((entry) => entry.dropReasons.includes('suppressed_by_crystallized_materialization')));
+});
+
+test('collectRecentRecallCandidates does not fallback to export ledger suppress when crystallizer ledger is absent', async () => {
+  const originalReadFile = fs.readFile;
+  fs.readFile = async (filePath, encoding) => {
+    if (String(filePath).includes('materialized-sources.json')) {
+      const error = new Error('missing crystallizer ledger');
+      error.code = 'ENOENT';
+      throw error;
+    }
+    if (String(filePath).includes('materialization-ledger')) {
+      return JSON.stringify({
+        version: 1,
+        updated_at: '2026-03-31T14:00:00.000Z',
+        items: {
+          'mat-1': { vestige_id: 'mat-1' },
+        },
+      });
+    }
+    return originalReadFile(filePath, encoding);
+  };
+
+  try {
+    const config = resolvePluginConfig({ enabled: true });
+    const result = await collectRecentRecallCandidates({
+      sidecarClient: {
+        async search() {
+          return {
+            ok: true,
+            data: {
+              items: [
+                {
+                  id: 'mat-1',
+                  source: 'vestige',
+                  category: 'preference',
+                  statement: 'Should remain because export-ledger fallback is removed.',
+                },
+              ],
+            },
+          };
+        },
+      },
+      config,
+      query: { queryText: 'test query' },
+      logger: {},
+    });
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0].canonicalKey, 'vestige:mat-1');
+  } finally {
+    fs.readFile = originalReadFile;
+  }
 });
 
 test('provider mode is the default config and disables direct before_prompt_build injection', async () => {

@@ -1,4 +1,4 @@
-import { collectMaterializedIds, loadMaterializationLedger } from './ledger.js';
+import { collectCrystallizedVestigeIds, loadCrystallizerMaterializedSources } from './crystallizer-ledger.js';
 import { normalizeEntries, hashNormalizedText } from './normalize.js';
 import { collapseDuplicates } from './dedupe.js';
 import { deriveBucket } from './packing.js';
@@ -38,6 +38,21 @@ function extractSearchItems(payload) {
   return [];
 }
 
+async function loadSuppressedVestigeIds(logger) {
+  try {
+    const crystallizerLedger = await loadCrystallizerMaterializedSources();
+    const ids = collectCrystallizedVestigeIds(crystallizerLedger.data);
+    logger?.debug?.('using crystallizer materialized-sources ledger for recent suppress', {
+      path: crystallizerLedger.path,
+      count: ids.length,
+    });
+    return ids;
+  } catch (error) {
+    logger?.warn?.(`failed to load crystallizer materialized-sources ledger: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
+}
+
 function mapBucketName(bucket) {
   const normalized = String(bucket || 'recent-other').trim().toLowerCase();
   switch (normalized) {
@@ -73,7 +88,7 @@ export function buildRecentRecallCandidates({
 
   for (const entry of normalizedRecent) {
     if (entry.id && materializedIdSet.has(entry.id)) {
-      dropped.push(dropWithReason(entry, 'suppressed_by_materialization_ledger'));
+      dropped.push(dropWithReason(entry, 'suppressed_by_crystallized_materialization'));
       continue;
     }
 
@@ -129,7 +144,7 @@ export async function collectRecentRecallCandidates({
     return [];
   }
 
-  const ledger = await loadMaterializationLedger(config.export);
+  const suppressedVestigeIds = await loadSuppressedVestigeIds(logger);
   const response = await sidecarClient.search({
     query: queryText,
     maxResults: config.recall.maxResults,
@@ -154,7 +169,7 @@ export async function collectRecentRecallCandidates({
 
   const result = buildRecentRecallCandidates({
     entries: recentEntries,
-    materializedIds: collectMaterializedIds(ledger.data),
+    materializedIds: suppressedVestigeIds,
     skipMaterialized: config.recall.skipMaterialized,
   });
 

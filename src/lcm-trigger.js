@@ -1,6 +1,15 @@
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
+const REQUIRED_TABLES = ['conversations', 'messages', 'message_parts', 'summaries'];
+
+const REQUIRED_COLUMNS = Object.freeze({
+  conversations: ['conversation_id', 'session_id', 'created_at'],
+  messages: ['message_id', 'conversation_id', 'seq', 'role', 'created_at'],
+  message_parts: ['message_id', 'part_type', 'text_content', 'tool_output', 'metadata', 'ordinal'],
+  summaries: ['summary_id', 'conversation_id', 'created_at', 'kind', 'depth', 'content'],
+});
+
 function resolveLcmDbPath(config = {}) {
   const explicit = typeof config?.behavior?.lcmDbPath === 'string' ? config.behavior.lcmDbPath.trim() : '';
   if (explicit) return explicit;
@@ -13,6 +22,10 @@ function querySqliteJson(dbPath, sql) {
   return text ? JSON.parse(text) : [];
 }
 
+function querySqliteText(dbPath, sql) {
+  return execFileSync('sqlite3', [dbPath, sql], { encoding: 'utf8' }).trim();
+}
+
 function toSqlString(value) {
   if (value === null || value === undefined) return 'NULL';
   return `'${String(value).replace(/'/g, "''")}'`;
@@ -23,8 +36,118 @@ function readMessageTextPart(row) {
     .find((value) => typeof value === 'string' && value.trim()) || '';
 }
 
-export function createLcmInspector(config = {}) {
+function buildLcmSchemaError(dbPath, issues = []) {
+  const detail = issues.length > 0 ? issues.join('; ') : 'unknown schema validation failure';
+  const error = new Error(
+    `LCM schema check failed for vestige-bridge at ${dbPath}. ${detail}. `
+      + 'lossless-claw schema likely drifted; inspect ~/.openclaw/lcm.db and update vestige-bridge before continuing.',
+  );
+  error.name = 'LcmSchemaValidationError';
+  error.code = 'LCM_SCHEMA_INVALID';
+  error.dbPath = dbPath;
+  error.issues = [...issues];
+  return error;
+}
+
+export function validateLcmSchema(config = {}) {
   const dbPath = resolveLcmDbPath(config);
+  const issues = [];
+
+  try {
+    const integrity = querySqliteText(dbPath, 'PRAGMA integrity_check;');
+    if (integrity !== 'ok') {
+      issues.push(`sqlite integrity_check returned ${JSON.stringify(integrity)}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw buildLcmSchemaError(dbPath, [`unable to open or inspect sqlite database (${message})`]);
+  }
+
+  for (const tableName of REQUIRED_TABLES) {
+    let exists = false;
+    try {
+      const rows = querySqliteJson(
+        dbPath,
+        `SELECT name FROM sqlite_master WHERE type='table' AND name=${toSqlString(tableName)} LIMIT 1`,
+      );
+      exists = Array.isArray(rows) && rows.some((row) => row?.name === tableName);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      issues.push(`failed to inspect sqlite_master for table ${tableName} (${message})`);
+      continue;
+    }
+
+    if (!exists) {
+      issues.push(`missing required table ${tableName}`);
+      continue;
+    }
+
+    try {
+      const rows = querySqliteJson(dbPath, `PRAGMA table_info(${tableName});`);
+      const presentColumns = new Set(
+        (Array.isArray(rows) ? rows : []).map((row) => String(row?.name || '').trim()).filter(Boolean),
+      );
+      for (const columnName of REQUIRED_COLUMNS[tableName] || []) {
+        if (!presentColumns.has(columnName)) {
+          issues.push(`missing required column ${tableName}.${columnName}`);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      issues.push(`failed to inspect columns for ${tableName} (${message})`);
+    }
+  }
+
+  try {
+    querySqliteJson(
+      dbPath,
+      `SELECT summary_id, created_at
+       FROM summaries
+       ORDER BY datetime(created_at) DESC, summary_id DESC
+       LIMIT 1`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    issues.push(`summary watermark probe failed (${message})`);
+  }
+
+  try {
+    querySqliteJson(
+      dbPath,
+      `SELECT m.role,
+              m.seq,
+              m.created_at AS createdAt,
+              mp.part_type AS partType,
+              mp.text_content,
+              mp.tool_output,
+              mp.metadata
+       FROM messages m
+       LEFT JOIN message_parts mp ON mp.message_id = m.message_id
+       ORDER BY m.seq ASC, mp.ordinal ASC
+       LIMIT 1`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    issues.push(`message join probe failed (${message})`);
+  }
+
+  if (issues.length > 0) {
+    throw buildLcmSchemaError(dbPath, issues);
+  }
+
+  return {
+    ok: true,
+    dbPath,
+    tables: [...REQUIRED_TABLES],
+    columns: Object.fromEntries(
+      Object.entries(REQUIRED_COLUMNS).map(([tableName, columnNames]) => [tableName, [...columnNames]]),
+    ),
+  };
+}
+
+export function createLcmInspector(config = {}) {
+  const schema = validateLcmSchema(config);
+  const dbPath = schema.dbPath;
 
   function getLatestSummaryWatermark(conversationId = null) {
     const where = conversationId === null || conversationId === undefined
@@ -196,8 +319,9 @@ export function createLcmInspector(config = {}) {
              mp.tool_output,
              mp.metadata
       FROM messages m
+      JOIN conversations c ON c.conversation_id = m.conversation_id
       LEFT JOIN message_parts mp ON mp.message_id = m.message_id
-      WHERE m.session_id = ${toSqlString(sessionId)}
+      WHERE c.session_id = ${toSqlString(sessionId)}
       ORDER BY m.seq DESC, mp.ordinal ASC
       LIMIT ${Math.max(1, Number(limit || 12) * 4)}
     `);
@@ -228,6 +352,7 @@ export function createLcmInspector(config = {}) {
 
   return {
     dbPath,
+    schema,
     getLatestSummaryWatermark,
     computeMessageDelta,
     computeConversationMessageDelta,

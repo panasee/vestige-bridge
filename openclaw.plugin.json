@@ -1,7 +1,9 @@
 {
   "id": "vestige-bridge",
   "name": "Vestige Bridge",
-  "hooks": ["hooks"],
+  "hooks": [
+    "hooks"
+  ],
   "description": "Bridge recent cognitive memory from a Vestige sidecar into OpenClaw runtime hooks.",
   "configSchema": {
     "type": "object",
@@ -13,7 +15,9 @@
       },
       "enabledAgents": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Only these agent ids use Vestige recall. Empty or omitted means all agents."
       },
       "baseUrl": {
@@ -35,7 +39,10 @@
       },
       "recallMode": {
         "type": "string",
-        "enum": ["injector", "provider"],
+        "enum": [
+          "injector",
+          "provider"
+        ],
         "default": "provider",
         "description": "Recall runtime mode. provider = expose structured recent recall candidates to orchestrator without prompt injection (default). injector = register before_prompt_build and inject prependContext directly for standalone compatibility/debugging."
       },
@@ -43,48 +50,58 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "maxResults": { "type": "integer", "minimum": 1 },
-          "maxTokens": { "type": "integer", "minimum": 1 },
-          "softTarget": { "type": "integer", "minimum": 1 },
-          "hardCap": { "type": "integer", "minimum": 1 },
-          "skipMaterialized": { "type": "boolean" },
-          "maxTailMessages": { "type": "integer", "minimum": 1 }
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxTokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "softTarget": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "hardCap": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "skipMaterialized": {
+            "type": "boolean"
+          },
+          "maxTailMessages": {
+            "type": "integer",
+            "minimum": 1
+          }
         }
       },
       "ingest": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "maxTailMessages": { "type": "integer", "minimum": 1 },
-          "maxPendingMessages": { "type": "integer", "minimum": 1, "maximum": 500, "description": "Maximum pending raw messages to feed into extraction after watermark-based retrieval." },
-          "maxPendingCharacters": { "type": "integer", "minimum": 500, "maximum": 200000, "description": "Character budget for pending raw messages before truncation." },
-          "gateModel": { "type": "string", "description": "Gate model as provider/model (e.g. openai-codex/gpt-5.4-mini). Returns TRUE/FALSE only." },
-          "extractModel": { "type": "string", "description": "Extract model as provider/model (e.g. openai-codex/gpt-5.2-codex). Performs semantic extraction." }
-        }
-      },
-      "export": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "rootDir": {
+          "maxTailMessages": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingMessages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Maximum pending raw messages to feed into extraction after watermark-based retrieval."
+          },
+          "maxPendingCharacters": {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 200000,
+            "description": "Character budget for pending raw messages before truncation."
+          },
+          "gateModel": {
             "type": "string",
-            "description": "Root directory for explicit export snapshots."
+            "description": "Gate model as provider/model (e.g. openai-codex/gpt-5.4-mini). Returns TRUE/FALSE only."
           },
-          "ledgerPath": {
+          "extractModel": {
             "type": "string",
-            "description": "Optional override for the local materialization ledger. By default the bridge stores a hashed ledger file under the user state dir (~/.local/state/openclaw/vestige-bridge/ledgers or XDG_STATE_HOME)."
-          },
-          "tmpSuffix": {
-            "type": "string",
-            "description": "Temporary suffix used for atomic export writes."
-          },
-          "enableExplicit": {
-            "type": "boolean",
-            "description": "Enable the explicit export runtime helper."
-          },
-          "keepSourceExports": {
-            "type": "boolean",
-            "description": "Keep raw Vestige export JSON files after adaptation instead of deleting auto-generated ones."
+            "description": "Extract model as provider/model (e.g. openai-codex/gpt-5.2-codex). Performs semantic extraction."
           }
         }
       },
@@ -94,7 +111,9 @@
         "properties": {
           "bucketPriority": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Priority order used by recent-memory packing."
           }
         }
@@ -149,15 +168,35 @@
     }
   },
   "uiHints": {
-    "enabled": { "label": "Enabled" },
-    "enabledAgents": { "label": "Enabled Agents" },
-    "baseUrl": { "label": "Sidecar Base URL" },
-    "timeoutMs": { "label": "Timeout (ms)" },
-    "debug": { "label": "Debug Logging" },
-    "recallMode": { "label": "Recall Mode" },
-    "recall": { "label": "Recall" },
-    "export": { "label": "Export" },
-    "packing": { "label": "Packing" },
-    "behavior": { "label": "Behavior" }
+    "enabled": {
+      "label": "Enabled"
+    },
+    "enabledAgents": {
+      "label": "Enabled Agents"
+    },
+    "baseUrl": {
+      "label": "Sidecar Base URL"
+    },
+    "timeoutMs": {
+      "label": "Timeout (ms)"
+    },
+    "debug": {
+      "label": "Debug Logging"
+    },
+    "recallMode": {
+      "label": "Recall Mode"
+    },
+    "recall": {
+      "label": "Recall"
+    },
+    "export": {
+      "label": "Export"
+    },
+    "packing": {
+      "label": "Packing"
+    },
+    "behavior": {
+      "label": "Behavior"
+    }
   }
 }

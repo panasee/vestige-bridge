@@ -80,7 +80,7 @@ export function prepareRecentRecall(input = {}) {
 
   for (const entry of normalizedRecent) {
     if (entry.id && materializedIdSet.has(entry.id)) {
-      dropped.push(dropWithReason(entry, 'suppressed_by_materialization_ledger'));
+      dropped.push(dropWithReason(entry, 'suppressed_by_crystallized_materialization'));
       continue;
     }
 

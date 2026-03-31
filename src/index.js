@@ -1,18 +1,10 @@
-import fs from 'node:fs/promises';
 import readline from 'node:readline';
 
 const HOUR_MS = 60 * 60 * 1000;
 
 import { resolvePluginConfig, shouldApplyToAgent } from './config.js';
-import { adaptExportFile } from './export-adapter.js';
-import {
-  collectMaterializedIds,
-  loadMaterializationLedger,
-  saveMaterializationLedger,
-  updateMaterializationLedger,
-} from './ledger.js';
+import { collectCrystallizedVestigeIds, loadCrystallizerMaterializedSources } from './crystallizer-ledger.js';
 import { createLogger } from './logger.js';
-import { materializeExportEnvelope } from './materialization.js';
 import { buildRecentRecallPacket } from './recall.js';
 import { buildAgentEndPayloadAsync } from './ingest.js';
 import { mergeCategoryEntries } from './category-store.js';
@@ -29,11 +21,11 @@ import {
   updateMessageWatermark,
   updateSummaryWatermark,
 } from './trigger-ledger.js';
-import { createLcmInspector } from './lcm-trigger.js';
+import { createLcmInspector, validateLcmSchema } from './lcm-trigger.js';
 
 const PLUGIN_ID = 'vestige-bridge';
 const PLUGIN_NAME = 'Vestige Bridge';
-const PLUGIN_DESCRIPTION = 'Vestige recent-memory bridge with explicit stable export materialization.';
+const PLUGIN_DESCRIPTION = 'Vestige recent-memory bridge for recent recall, ingest, and LCM-triggered maintenance.';
 
 function toOperationPayload(value, fallbackPayload) {
   if (value === undefined || value === null || value === false) {
@@ -97,135 +89,6 @@ async function failSoft(runtime, hookName, work) {
   }
 }
 
-function buildGenerationId(generatedAt) {
-  return `${generatedAt}--vestige-export`;
-}
-
-async function readRecentMessagesFromSessionFile(sessionFile, maxMessages = 12) {
-  if (!sessionFile || typeof sessionFile !== 'string') {
-    return [];
-  }
-
-  try {
-    const stream = (await import('node:fs')).createReadStream(sessionFile, { encoding: 'utf8' });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-    const rows = [];
-    for await (const line of rl) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const parsed = JSON.parse(trimmed);
-        rows.push(parsed);
-      } catch {
-        // ignore malformed lines
-      }
-    }
-    return rows
-      .slice(-maxMessages)
-      .map((row) => ({ role: row?.role || 'assistant', content: typeof row?.content === 'string' ? row.content : '' }))
-      .filter((row) => row.content);
-  } catch {
-    return [];
-  }
-}
-
-function buildEventForSessionEntry(baseEvent, sessionEntry, messages) {
-  return {
-    ...baseEvent,
-    sessionEntry,
-    messages,
-  };
-}
-
-function buildExportFileName(generatedAt) {
-  return `vestige-bridge-${generatedAt.replace(/[:.]/g, '-').replace(/\+00-00$/, 'Z')}.json`;
-}
-
-function computeTimeTriggerDelayMs(nowMs, intervalHours) {
-  const intervalMs = Math.max(1, intervalHours) * HOUR_MS;
-  const nextBoundaryMs = (Math.floor(nowMs / intervalMs) + 1) * intervalMs;
-  return Math.max(1_000, nextBoundaryMs - nowMs);
-}
-
-async function runExplicitExport(runtime, payload = {}) {
-  const { client, config } = runtime;
-  if (!config.export.enableExplicit) {
-    return {
-      ok: false,
-      skipped: true,
-      reason: 'explicit_export_disabled',
-    };
-  }
-
-  const generatedAt = new Date().toISOString();
-  const generationId = buildGenerationId(generatedAt);
-  const exportFilePath = typeof payload.exportPayload?.path === 'string' && payload.exportPayload.path.trim().length > 0
-    ? payload.exportPayload.path.trim()
-    : buildExportFileName(generatedAt);
-
-  const consolidate = payload.consolidate === false
-    ? { ok: true, skipped: true, reason: 'consolidate_disabled' }
-    : await client.consolidate({
-        ...(payload.consolidatePayload && typeof payload.consolidatePayload === 'object' ? payload.consolidatePayload : {}),
-      });
-
-  const exportResult = await client.exportMemories({
-    format: 'json',
-    ...(payload.exportPayload && typeof payload.exportPayload === 'object' ? payload.exportPayload : {}),
-    path: exportFilePath,
-  });
-
-  if (!exportResult?.ok) {
-    return {
-      ok: false,
-      consolidate,
-      export: exportResult,
-      reason: 'export_failed',
-    };
-  }
-
-  const resolvedExportPath = exportResult.data?.path;
-  if (!resolvedExportPath) {
-    return {
-      ok: false,
-      consolidate,
-      export: exportResult,
-      reason: 'export_missing_path',
-    };
-  }
-
-  const adapted = await adaptExportFile({
-    exportPath: resolvedExportPath,
-    generationId,
-    generatedAt,
-  });
-
-  const materialized = await materializeExportEnvelope(adapted.envelope, config.export);
-  const loadedLedger = await loadMaterializationLedger(config.export);
-  const nextLedger = updateMaterializationLedger({
-    ledgerData: loadedLedger.data,
-    materialized,
-    envelope: adapted.envelope,
-  });
-  const savedLedger = await saveMaterializationLedger(loadedLedger.path, nextLedger);
-
-  if (!config.export.keepSourceExports && resolvedExportPath && (!payload.exportPayload || !payload.exportPayload.path)) {
-    await fs.rm(resolvedExportPath, { force: true }).catch(() => undefined);
-  }
-
-  return {
-    ok: materialized.failed_shards.length === 0,
-    consolidate,
-    export: exportResult,
-    adapted,
-    materialized,
-    ledger: {
-      path: savedLedger.path,
-      count: Object.keys(savedLedger.data.items).length,
-    },
-  };
-}
-
 export function createVestigeBridgeRuntime(options = {}) {
   const config = resolvePluginConfig(options.pluginConfig ?? {}, options.workspaceDir ?? process.cwd());
   const logger = createLogger(options.logger, {
@@ -242,6 +105,22 @@ export function createVestigeBridgeRuntime(options = {}) {
     fetchImpl: options.fetchImpl,
   });
 
+  let lcmSchemaStatus;
+  try {
+    lcmSchemaStatus = validateLcmSchema(config);
+    logger.info('LCM schema validation passed', {
+      dbPath: lcmSchemaStatus.dbPath,
+      tables: lcmSchemaStatus.tables,
+    });
+  } catch (error) {
+    logger.error('LCM schema validation failed', {
+      code: error?.code || 'LCM_SCHEMA_INVALID',
+      dbPath: error?.dbPath || config?.behavior?.lcmDbPath || null,
+      issues: Array.isArray(error?.issues) ? error.issues : [error instanceof Error ? error.message : String(error)],
+    });
+    throw error;
+  }
+
   const lcmInspector = createLcmInspector(config);
   const recallProvider = createVestigeRecallProvider({ client, config, logger });
 
@@ -254,13 +133,13 @@ export function createVestigeBridgeRuntime(options = {}) {
     }
 
     return failSoft({ config, logger, client }, 'before_prompt_build', async () => {
-      const ledger = await loadMaterializationLedger(config.export);
+      const crystallizerLedger = await loadCrystallizerMaterializedSources();
       const result = await buildRecentRecallPacket({
         sidecarClient: client,
         config,
         messages: Array.isArray(event?.messages) ? event.messages : [],
         latestUserTurn: typeof event?.prompt === 'string' ? event.prompt : '',
-        materializedIds: collectMaterializedIds(ledger.data),
+        materializedIds: collectCrystallizedVestigeIds(crystallizerLedger.data),
         logger,
       });
 
@@ -610,8 +489,15 @@ export function createVestigeBridgeRuntime(options = {}) {
     config,
     logger,
     client,
-    health() {
-      return client.health();
+    async health() {
+      const sidecar = await client.health();
+      return {
+        ...sidecar,
+        lcm: {
+          ...(lcmSchemaStatus || {}),
+          ok: lcmSchemaStatus?.ok === true,
+        },
+      };
     },
     getRecallProvider() {
       return recallProvider;
@@ -624,9 +510,6 @@ export function createVestigeBridgeRuntime(options = {}) {
     sessionEnd,
     scheduleNextTimeTrigger,
     cancelTimeTrigger,
-    explicitExport(payload = {}) {
-      return failSoft({ config, logger, client }, 'explicit_export', () => runExplicitExport({ config, logger, client }, payload));
-    },
   };
 }
 
@@ -689,7 +572,6 @@ const plugin = {
     }, { names: ['memory_store'] });
 
     api.vestigeBridge = {
-      exportStableNow: async (payload = {}) => runtime.explicitExport(payload),
       health: () => runtime.health(),
       getConfig: () => runtime.config,
       getRecallProvider: () => runtime.getRecallProvider(),

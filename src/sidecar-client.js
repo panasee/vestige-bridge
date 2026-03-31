@@ -637,16 +637,6 @@ export function createSidecarClient(options = {}) {
     return callFirstSupported('intention', ['intention'], payload, normalizeIntentionPayload);
   }
 
-  async function exportMemories(payload, requestOptions) {
-    void requestOptions;
-    return callFirstSupported('export', ['export'], payload, normalizeExportPayload);
-  }
-
-  async function exportStable(payload, requestOptions) {
-    void requestOptions;
-    return callFirstSupported('exportStable', ['export_stable', 'exportStable'], payload, normalizeUnsupportedPayload);
-  }
-
   async function consolidate(payload, requestOptions) {
     void requestOptions;
     return callFirstSupported('consolidate', ['consolidate'], payload, normalizeConsolidatePayload);
@@ -693,11 +683,6 @@ export function createSidecarClient(options = {}) {
           return demoteMemory(payload);
         case 'intention':
           return intention(payload);
-        case 'export':
-        case 'exportMemories':
-          return exportMemories(payload);
-        case 'exportStable':
-          return exportStable(payload);
         case 'consolidate':
           return consolidate(payload);
         case 'markMaterialized':
@@ -722,8 +707,6 @@ export function createSidecarClient(options = {}) {
     promoteMemory,
     demoteMemory,
     intention,
-    exportMemories,
-    exportStable,
     consolidate,
     markMaterialized,
     close,
@@ -784,14 +767,6 @@ export class VestigeSidecarClient {
 
   intention(...args) {
     return this.client.intention(...args);
-  }
-
-  exportMemories(...args) {
-    return this.client.exportMemories(...args);
-  }
-
-  exportStable(...args) {
-    return this.client.exportStable(...args);
   }
 
   consolidate(...args) {

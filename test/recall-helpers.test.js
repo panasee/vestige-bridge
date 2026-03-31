@@ -122,7 +122,7 @@ test('prepareRecentRecall skips materialized recent items and returns packet plu
 
   assert.equal(result.packet, '');
   assert.equal(result.selected.length, 0);
-  assert.ok(result.dropped.some((entry) => entry.dropReasons.includes('suppressed_by_materialization_ledger')));
+  assert.ok(result.dropped.some((entry) => entry.dropReasons.includes('suppressed_by_crystallized_materialization')));
   assert.ok(result.dropped.some((entry) => entry.dropReasons.includes('skipped_materialized_recent')));
   assert.match(result.query, /vestige-bridge/i);
 });
