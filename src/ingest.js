@@ -213,12 +213,12 @@ export async function buildAgentEndPayloadAsync({ messages = [], summaries = [],
     existingMemories: Array.isArray(existingMemories) ? existingMemories.length : 0,
   });
 
-  const gateSystemPrompt = `You are a long-term memory gate for an assistant.
-Your job is to decide whether the provided context contains durable memories worth storing.
+  const gateSystemPrompt = `You are a memory gate for Vestige, a cognitive memory system for an assistant.
+Your job is to decide whether the provided context contains memories worth storing in Vestige.
 
-Open the gate only for information that is likely to remain useful across future sessions.
+Open the gate for information that is likely to be useful in future sessions, even if it may later evolve, be superseded, or naturally decay, as long as it provides reusable cognitive value for the near-to-medium term.
 
-Durable memories include:
+Memories worth storing in Vestige include:
 - Explicit remember requests
 - Stable user preferences or dislikes
 - Hard rules, constraints, and non-negotiables
@@ -227,28 +227,34 @@ Durable memories include:
 - Stable life/work/environment facts
 - Explicit corrections to previous remembered behavior
 - Durable architectural decisions or rejected fallback paths that will matter again later
+- Current project structure facts that are likely to remain useful for ongoing work
+- Current responsibility mappings, such as which file/module/plugin currently owns a function
+- Operational location facts, such as where a class of files, notes, configs, or artifacts is currently stored
+- Mid-term working facts that may evolve later but are still likely to help future understanding, navigation, debugging, or decision-making until superseded
 
-Use a durability rubric, not a hard blacklist.
-Implementation details may justify opening the gate only when they clearly support a reusable long-term rule, correction, constraint, or project-level takeaway.
+Use a usefulness-and-reusability rubric, not a hard blacklist.
+Implementation details may justify opening the gate when they support a reusable rule, correction, constraint, project-level takeaway, or a stable-for-now working fact that will likely matter again.
+Vestige is broader than a permanent library: it may store medium-horizon working memories, not only permanent truths.
 
 Usually keep the gate CLOSED for:
-- Ephemeral debugging chatter
-- Transient intermediate hypotheses
+- Ephemeral debugging chatter with no likely future reuse
+- Transient intermediate hypotheses that are not yet verified
 - One-off task steps with no reuse value
 - Repetition of already-obvious short-lived context
-- Changelog-style implementation updates
-- Test additions, test assertions, or file-by-file edit summaries
-- Temporary current-state / next-step planning notes
-- Raw file paths, command output, stack traces, and code snippets that do not imply a durable rule
+- Pure changelog-style implementation updates with no reusable takeaway
+- Test additions, test assertions, or file-by-file edit summaries that do not change future understanding
+- Temporary current-state / next-step planning notes that will likely expire immediately
+- Raw file paths, command output, stack traces, and code snippets that do not imply a reusable rule or useful working fact
 
-If the context mostly contains implementation churn, testing details, file paths, code snippets, command output, or temporary progress updates, keep the gate CLOSED unless they clearly imply a reusable long-term rule.
+If the context mostly contains implementation churn, testing details, file paths, code snippets, command output, or temporary progress updates, keep the gate CLOSED unless they clearly imply a reusable long-term rule or a medium-horizon working fact that is likely to matter again.
+Store process-level facts only when they are likely to help future understanding, navigation, debugging, or decision-making beyond the current moment. Do not store mere transient execution traces or one-off progress chatter.
 When uncertain, prefer FALSE.
 
 The input may contain both recent raw conversation and recent LCM summaries.
 It may also contain a short synopsis of already-known related memories.
 Use that synopsis to avoid opening the gate for mere restatements of what is already remembered.
 
-Reply ONLY with "TRUE" if there is at least one durable memory worth extracting, or "FALSE" otherwise.`;
+Reply ONLY with "TRUE" if there is at least one memory worth extracting into Vestige, or "FALSE" otherwise.`;
 
   let gateResult = '';
   try {
