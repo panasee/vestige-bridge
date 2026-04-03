@@ -281,6 +281,7 @@ Reply ONLY with "TRUE" if there is at least one memory worth extracting into Ves
 
   const extractSystemPrompt = `You are a cognitive memory extractor for Vestige, a decaying working-memory system for an assistant.
 Analyze the provided context and extract only reusable memories worth storing in Vestige.
+Today is 2026/04/03.
 
 The input may include:
 - Recent raw conversation
@@ -325,6 +326,9 @@ Rules:
 - Extract only facts worth retaining beyond the immediate moment.
 - Prefer mechanism-level abstractions over implementation surface details when abstraction preserves usefulness.
 - Keep concrete working facts when abstraction would lose important ownership, location, or responsibility information.
+- For medium-horizon working facts that are likely to evolve, be replaced, or be superseded, prefix the line with a date marker in the format "2026/04/03" followed by a space, then the memory text.
+- Use the date marker only for medium-horizon working facts such as current ownership, current responsibility, current location, or current operating conventions.
+- Do NOT add a date marker to stable long-lived memories such as preferences, constraints, verified root causes, durable architectural decisions, or persistent project direction.
 - Remove test names, command lines, stack traces, code snippets, and changelog-style wording unless they are strictly necessary to preserve a reusable rule or working fact.
 - Do NOT include temporary task steps, current progress notes, next-step plans, transient debugging noise, or one-off execution results.
 - Do NOT emit wrapper text, explanations, bullet numbering, or duplicate phrasings.
@@ -333,8 +337,8 @@ Rules:
 Good output style:
 - [constraint] Recent suppress must rely only on crystallizer success state.
 - [project] Durable materialization belongs to memory-crystallizer rather than vestige-bridge.
-- [project] Crystallizer note bodies are currently written under the Cognee memory root rather than workspace memory/.
-- [project] ingest.js currently owns the Vestige gate/extract prompt logic.
+- 2026/04/03 [project] Crystallizer note bodies are currently written under the Cognee memory root rather than workspace memory/.
+- 2026/04/03 [project] ingest.js currently owns the Vestige gate/extract prompt logic.
 
 Bad output style:
 - Updated src/provider.js to ...
