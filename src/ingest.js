@@ -16,6 +16,22 @@ function compactWhitespace(text) {
     .trim();
 }
 
+function formatPromptDate(value, timeZone = 'Asia/Singapore') {
+  const date = value ? new Date(value) : new Date();
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(safeDate);
+
+  const year = parts.find((part) => part.type === 'year')?.value || '1970';
+  const month = parts.find((part) => part.type === 'month')?.value || '01';
+  const day = parts.find((part) => part.type === 'day')?.value || '01';
+  return `${year}/${month}/${day}`;
+}
+
 function stripInjectedBlocks(text) {
   return text
     .replace(/<vestige_recent>[\s\S]*?<\/vestige_recent>/gi, '')
@@ -206,6 +222,8 @@ export async function buildAgentEndPayloadAsync({ messages = [], summaries = [],
     return null;
   }
 
+  const promptDate = formatPromptDate(trigger?.at);
+
   logger?.info('[vestige-bridge/ingest] Evaluating LCM-aware memory context', {
     triggerKind: trigger?.kind || 'unknown',
     rawMessages: Array.isArray(messages) ? messages.length : 0,
@@ -281,7 +299,7 @@ Reply ONLY with "TRUE" if there is at least one memory worth extracting into Ves
 
   const extractSystemPrompt = `You are a cognitive memory extractor for Vestige, a decaying working-memory system for an assistant.
 Analyze the provided context and extract only reusable memories worth storing in Vestige.
-Today is 2026/04/03.
+Today is ${promptDate}.
 
 The input may include:
 - Recent raw conversation
@@ -326,7 +344,7 @@ Rules:
 - Extract only facts worth retaining beyond the immediate moment.
 - Prefer mechanism-level abstractions over implementation surface details when abstraction preserves usefulness.
 - Keep concrete working facts when abstraction would lose important ownership, location, or responsibility information.
-- For medium-horizon working facts that are likely to evolve, be replaced, or be superseded, prefix the line with a date marker in the format "2026/04/03" followed by a space, then the memory text.
+- For medium-horizon working facts that are likely to evolve, be replaced, or be superseded, prefix the line with a date marker in the format "${promptDate}" followed by a space, then the memory text.
 - Use the date marker only for medium-horizon working facts such as current ownership, current responsibility, current location, or current operating conventions.
 - Do NOT add a date marker to stable long-lived memories such as preferences, constraints, verified root causes, durable architectural decisions, or persistent project direction.
 - Remove test names, command lines, stack traces, code snippets, and changelog-style wording unless they are strictly necessary to preserve a reusable rule or working fact.
@@ -337,8 +355,8 @@ Rules:
 Good output style:
 - [constraint] Recent suppress must rely only on crystallizer success state.
 - [project] Durable materialization belongs to memory-crystallizer rather than vestige-bridge.
-- 2026/04/03 [project] Crystallizer note bodies are currently written under the Cognee memory root rather than workspace memory/.
-- 2026/04/03 [project] ingest.js currently owns the Vestige gate/extract prompt logic.
+- ${promptDate} [project] Crystallizer note bodies are currently written under the Cognee memory root rather than workspace memory/.
+- ${promptDate} [project] ingest.js currently owns the Vestige gate/extract prompt logic.
 
 Bad output style:
 - Updated src/provider.js to ...
