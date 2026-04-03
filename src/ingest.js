@@ -279,8 +279,8 @@ Reply ONLY with "TRUE" if there is at least one memory worth extracting into Ves
     return null;
   }
 
-  const extractSystemPrompt = `You are a cognitive memory extractor for an assistant.
-Analyze the provided context and extract only durable, reusable memories.
+  const extractSystemPrompt = `You are a cognitive memory extractor for Vestige, a decaying working-memory system for an assistant.
+Analyze the provided context and extract only reusable memories worth storing in Vestige.
 
 The input may include:
 - Recent raw conversation
@@ -289,25 +289,27 @@ The input may include:
 - A short synopsis of already-known related memories
 
 Use the summaries for cross-turn context and the raw conversation for newer unsummarized facts.
-Prefer stable, verified takeaways over intermediate chatter.
+Prefer verified or clearly actionable takeaways over intermediate chatter.
 If raw conversation and summaries conflict, prefer the more recent explicit correction in the raw conversation; otherwise prefer the more stable summarized fact.
 Do not duplicate the same idea in multiple phrasings.
 
 Your goal is to produce memory statements that remain useful when read alone in a future session.
-Rewrite implementation-specific observations into higher-level durable takeaways when possible.
-If a candidate memory cannot be rewritten into a standalone long-lived takeaway, omit it.
+Vestige may store not only long-lived durable memories, but also medium-horizon working facts that are likely to remain useful until they are superseded, forgotten, or decay naturally.
+Rewrite implementation-specific observations into higher-level takeaways when possible, but preserve concrete working facts when those specifics are exactly what future navigation, debugging, or understanding will depend on.
+If a candidate memory cannot stand alone as a reusable future aid, omit it.
 Summarize into no more than ${maxItems} memory items total.
 If there are more than ${maxItems} plausible candidates, keep only the highest-value, most reusable, and most important ones, and omit the lower-priority items.
 Prefer fewer, stronger memories over a comprehensive list.
 
-Durability rubric:
-- Prefer stable preferences, constraints, verified root causes, reusable fixes, durable project direction, and explicit user corrections.
-- Usually skip temporary task state, step-by-step progress, implementation churn, command chatter, stack traces, test details, file-by-file edit notes, and raw code/config/path details.
-- Exception: if low-level details clearly support a reusable long-term rule, abstract that rule and store the abstraction instead of the raw detail.
+Usefulness rubric:
+- Prefer stable preferences, constraints, verified root causes, reusable fixes, durable project direction, explicit user corrections, and project/work facts likely to matter again.
+- Also allow medium-horizon working facts such as current structure ownership, responsibility mapping, and where important classes of files/configs/artifacts are currently kept, when those facts are likely to help future navigation, debugging, or decision-making.
+- Usually skip temporary task state, step-by-step progress, implementation churn, command chatter, stack traces, test details, file-by-file edit notes, and raw code/config/path details that do not add reusable future value.
+- Exception: if low-level details clearly support a reusable rule or a useful working fact, keep the abstraction or the concrete working fact, whichever will be more useful later.
 
 Existing-memory handling:
 - If the provided synopsis already covers the same idea, prefer to OMIT a duplicate restatement.
-- If the new context sharpens or corrects an existing memory, emit only the refined/corrected durable takeaway.
+- If the new context sharpens or corrects an existing memory, emit only the refined/corrected takeaway.
 - Prefer refine / correct / skip over parallel near-duplicate notes.
 
 Output format: one fact per line. Prefix each line with a category tag when applicable:
@@ -315,14 +317,15 @@ Output format: one fact per line. Prefix each line with a category tag when appl
   [constraint] - hard rules, must-do/never-do constraints, non-negotiables
   [preference] - user likes, dislikes, or style preferences
   [life]       - personal facts, routines, relationships, life events
-  (no prefix)  - other durable facts that do not fit the above
+  (no prefix)  - other reusable facts that do not fit the above
 
 Rules:
 - Be concise, direct, and factual.
 - Write from the assistant's remembering perspective.
-- Extract only facts worth retaining beyond the current session.
-- Prefer mechanism-level abstractions over implementation surface details.
-- Remove file paths, test names, command lines, stack traces, code snippets, and changelog-style wording unless they are strictly necessary to preserve a durable rule.
+- Extract only facts worth retaining beyond the immediate moment.
+- Prefer mechanism-level abstractions over implementation surface details when abstraction preserves usefulness.
+- Keep concrete working facts when abstraction would lose important ownership, location, or responsibility information.
+- Remove test names, command lines, stack traces, code snippets, and changelog-style wording unless they are strictly necessary to preserve a reusable rule or working fact.
 - Do NOT include temporary task steps, current progress notes, next-step plans, transient debugging noise, or one-off execution results.
 - Do NOT emit wrapper text, explanations, bullet numbering, or duplicate phrasings.
 - When uncertain, omit the item rather than storing a low-value memory.
@@ -330,6 +333,8 @@ Rules:
 Good output style:
 - [constraint] Recent suppress must rely only on crystallizer success state.
 - [project] Durable materialization belongs to memory-crystallizer rather than vestige-bridge.
+- [project] Crystallizer note bodies are currently written under the Cognee memory root rather than workspace memory/.
+- [project] ingest.js currently owns the Vestige gate/extract prompt logic.
 
 Bad output style:
 - Updated src/provider.js to ...
