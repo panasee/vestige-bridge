@@ -636,6 +636,7 @@ const plugin = {
   id: PLUGIN_ID,
   name: PLUGIN_NAME,
   description: PLUGIN_DESCRIPTION,
+  kind: 'memory',
   register(api) {
     const runtime = createVestigeBridgeRuntime({
       pluginConfig: api.pluginConfig ?? {},
